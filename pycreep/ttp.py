@@ -1,14 +1,16 @@
-from pycreep import units, methods
+from pycreep import units, methods, dataset
 
 import numpy as np
 import numpy.linalg as la
 
-class TTPAnalysis:
+class TTPAnalysis(dataset.DataSet):
     """
         Superclass for time-temperature parameter (TTP) analysis of a
         dataset
 
         Args:
+            TTP:                        time-temperature parameter
+            order:                      polynomial order
             data:                       dataset as a pandas dataframe
 
         Keyword Args:
@@ -29,160 +31,76 @@ class TTPAnalysis:
                                             "MPa"
             analysis_time_units (str):  analysis time units, default is "hr"
 
+        The setup and analyzed objects are suppose to maintain the following properties:
+            * "preds":      predictions for each point
+            * "C_avg":      overall TTP parameter
+            * "C_heat":     dictionary mapping each heat to the 
+                            lot-specific TTP
+            * "poly_avg":   polynomial coefficients for the average
+                            model
+            * "R2":         coefficient of determination
+            * "SSE":        standard squared error
+            * "SEE":        standard error estimate
+            * "SEE_heat":   SEE without lot centering, i.e. if you have a random heat
+            * "R2_heat":    R2 without lot centering, i.e. if you have a random heat
     """
-    def __init__(self, data, time_field = "Life (h)", temp_field = "Temp (C)",
+    def __init__(self, TTP, order, data, time_field = "Life (h)", 
+            temp_field = "Temp (C)",
             stress_field = "Stress (MPa)", heat_field = "Heat/Lot ID",
             input_temp_units = "degC", input_stress_units = "MPa", 
             input_time_units = "hrs", analysis_temp_units = "K",
             analysis_stress_units = "MPa", analysis_time_units = "hrs"):
-        self.data = data
-        self.time_field = time_field
-        self.temp_field = temp_field
-        self.stress_field = stress_field
-        self.heat_field = heat_field
-
-        self.input_temp_units = input_temp_units
-        self.input_stress_units = input_stress_units
-        self.input_time_units = input_time_units
+        super().__init__(data)
         
-        self.analysis_temp_units = analysis_temp_units
-        self.analysis_stress_units = analysis_stress_units
-        self.analysis_time_units = analysis_time_units
+        self.TTP = TTP
+        self.order = order
+
+        self.add_field_units("temperature", temp_field, input_temp_units, 
+                analysis_temp_units)
+        self.add_field_units("stress", stress_field, input_stress_units,
+                analysis_stress_units)
+        self.add_field_units("time", time_field, input_time_units,
+                analysis_time_units)
         
-        self.setup_data()
-
-    def setup_data(self):
-        """
-            Read data into required arrays from dataframe, translate
-            units if requested
-        """
-        self.temperature = units.convert(np.array(self.data[self.temp_field]),
-                self.input_temp_units, self.analysis_temp_units)
-        self.stress = units.convert(np.array(self.data[self.stress_field]),
-                self.input_stress_units, self.analysis_stress_units)
-        self.time = units.convert(np.array(self.data[self.time_field]),
-                self.input_time_units, self.analysis_time_units)
-
-        self.heats = self.data[self.heat_field]
-        self.heat_indices = {hi: self.heats.index[self.heats == hi] 
-                for hi in set(self.heats)}
+        self.add_heat_field(heat_field)
 
     @property
     def nheats(self):
         return len(self.heat_indices.keys())
 
-    def polynomial_analysis(self, order, lot_centering = False):
+    def report(self):
         """
-            Completes a polynomial correlation between log stress
-            and the TTP.
-
-            Args:
-                order (int):            polynomial order to use
-
-            Keyword Args:
-                lot_centering (bool):   if True lot center the TTP parameter
-
-            Returns:
-                dict of results, which includes:
-                    * "preds":      predictions for each point
-                    * "C_avg":      overall TTP parameter
-                    * "C_heat":     dictionary mapping each heat to the 
-                                    lot-specific TTP
-                    * "poly_avg":   polynomial coefficients for the average
-                                    model
-                    * "R2":         coefficient of determination
-                    * "SSE":        standard squared error
-                    * "SEE":        standard error estimate
-                    * "SEE_heat":   SEE without lot centering, i.e. if you have a random heat
-                    * "R2_heat":    R2 without lot centering, i.e. if you have a random heat
+            Provide a standard dict description of results
         """
-        if lot_centering:
-            return self.lot_centered_polynomial_analysis(order)
-        else:
-            return self.all_lot_polynomial_analysis(order)
-
-    def all_lot_polynomial_analysis(self, order):
-        """
-            Uncentered polynomial analysis
-
-            Args:
-                order:      polynomial order
-
-            Returns:
-                standard results dictionary described in polynomial_analysis
-        """
-        X = np.concatenate((
-            np.vander(np.log10(self.stress), N = order + 1) * self.stress_transform()[:,None],
-            -np.ones((len(self.stress),1))), axis = 1)
-        y = np.log10(self.time)
-
-        b, p, SSE, R2, SEE = methods.least_squares(X, y)
-
         return {
-                "preds": p,
-                "C_avg": b[-1],
-                "C_heat": {h: b[-1] for h in self.heat_indices.keys()},
-                "polyavg": b[:-1],
-                "R2": R2,
-                "SSE": SSE,
-                "SEE": SEE,
-                "SEE_heat": SEE,
-                "R2_heat": R2
-                }
-    
-    def lot_centered_polynomial_analysis(self, order):
-        """
-            Lot centered polynomial analysis
-
-            Args:
-                order:      polynomial order
-
-            Returns:
-                standard results dictionary described in polynomial_analysis
-        """
-        # Setup the lot matrix
-        C = np.zeros((len(self.stress), self.nheats+1))
-        C[:,0] = -1.0
-        for i, inds in enumerate(self.heat_indices.values()):
-            C[inds,i+1] = -1.0
-
-        # Setup the correlation matrix
-        X = np.concatenate((
-            np.vander(np.log10(self.stress), N = order + 1) * self.stress_transform()[:,None],
-            C), axis = 1)
-        y = np.log10(self.time)
-        
-        b, p, SSE, R2, SEE = methods.least_squares(X, y)
-
-        C_avg = sum((b[order+1]+b[order+1+i+1]) * len(inds) for i,(h,inds) in enumerate(self.heat_indices.items())
-                ) / len(self.stress)
-
-        # Now go back and calculate the SEE and the R2 values as if you have a random heat
-        poly = b[:order+1]
-        p_prime = self.predict_polynomial(poly, C_avg)
-        e_prime = y - p_prime
-        SEE_prime = np.sqrt(np.sum(e_prime**2.0) / (X.shape[0] - order - 2))
-        ybar = np.mean(y)
-        SST = np.sum((y - ybar)**2.0)
-        R2_heat = 1.0 - np.sum(e_prime**2.0) / SST
-
-        return {
-                "preds": p,
-                "C_avg": C_avg,
-                "C_heat": {h: b[order+1]+b[order+1+i+1] for i,h in enumerate(self.heat_indices.keys())},
-                "polyavg": poly,
-                "R2": R2,
-                "SSE": SSE,
-                "SEE": SEE,
-                "SEE_heat": SEE_prime,
-                "R2_heat": R2_heat
+                "preds": self.preds,
+                "C_avg": self.C_avg,
+                "C_heat": self.C_heat,
+                "polyavg": self.polyavg,
+                "R2": self.R2,
+                "SSE": self.SSE,
+                "SEE": self.SEE,
+                "SEE_heat": self.SEE_heat,
+                "R2_heat": self.R2_heat
                 }
 
-class LMPAnalysis(TTPAnalysis):
+    def predict_time(self, stress, temperature):
+        """
+            Predict new times given stress and temperature
+
+            Args:
+                stress:         input stress values
+                temperature:    input temperature values
+        """
+        return 10.0**predict(self.polyavg, self.C_avg, stress, temperature)
+
+class UncenteredAnalysis(TTPAnalysis):
     """
-        Larson Miller analysis of the data
+        Do an uncentered analysis of the data
 
         Args:
+            TTP:                        time-temperature parameter
+            order:                      polynomial order
             data:                       dataset as a pandas dataframe
 
         Keyword Args:
@@ -206,21 +124,133 @@ class LMPAnalysis(TTPAnalysis):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def stress_transform(self):
+    def analyze(self):
         """
-            Multiply stress terms by this to transform
+            Actually do the regression analysis and set standard properties 
         """
-        return 1.0 / self.temperature
+        X = np.concatenate((
+            np.vander(np.log10(self.stress), N = self.order + 1
+                ) * self.TTP.stress_transform(self.time, self.temperature)[:,None],
+            -np.ones((len(self.stress),1))), axis = 1)
+        y = np.log10(self.time)
 
-    def predict_polynomial(self, poly, C):
+        b, p, SSE, R2, SEE = methods.least_squares(X, y)
+        
+        # Setup results
+        self.preds = p
+        self.C_avg = b[-1]
+        self.C_heat = {h: b[-1] for h in self.heat_indices.keys()}
+        self.polyavg = b[:-1]
+        self.R2 = R2
+        self.SSE = SSE
+        self.SEE = SEE
+        self.SEE_heat = SEE
+        self.R2_heat = R2
+
+        return self
+
+class LotCenteredAnalysis(TTPAnalysis):
+    """
+        Do an uncentered analysis of the data
+
+        Args:
+            TTP:                        time-temperature parameter
+            order:                      polynomial order
+            data:                       dataset as a pandas dataframe
+
+        Keyword Args:
+            time_field (str):           field in array giving time, default is
+                                        "Life (h)"
+            temp_field (str):           field in array giving temperature, default
+                                        is "Temp (C)"
+            stress_field (str):         field in array giving stress, default is
+                                        "Stress (MPa)"
+            heat_field (str):           filed in array giving heat ID, default is
+                                        "Heat/Lot ID"
+            input_temp_units (str):     temperature units, default is "C"
+            input_stress_units (str):   stress units, default is "MPa"
+            input_time_units (str):     time units, default is "hr"
+            analysis_temp_units (str):  temperature units for analysis, 
+                                        default is "K"
+            analysis_stress_units (str):    analysis stress units, default is 
+                                            "MPa"
+            analysis_time_units (str):  analysis time units, default is "hr"
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def analyze(self):
         """
-            Predict log time for a given value of the polynomial and the TPP parameter
+            Actually do the regression analysis and set standard properties 
+        """
+        # Setup the lot matrix
+        C = np.zeros((len(self.stress), self.nheats+1))
+        C[:,0] = -1.0
+        for i, inds in enumerate(self.heat_indices.values()):
+            C[inds,i+1] = -1.0
+
+        # Setup the correlation matrix
+        X = np.concatenate((
+            np.vander(np.log10(self.stress), N = self.order + 1
+                ) * self.TTP.stress_transform(self.time, self.temperature)[:,None],
+            C), axis = 1)
+        y = np.log10(self.time)
+        
+        b, p, SSE, R2, SEE = methods.least_squares(X, y)
+
+        C_avg = sum((b[self.order+1]+b[self.order+1+i+1]) * len(inds) for i,(h,inds) in enumerate(self.heat_indices.items())
+                ) / len(self.stress)
+
+        # Now go back and calculate the SEE and the R2 values as if you have a random heat
+        poly = b[:self.order+1]
+        p_prime = self.TTP.predict(poly, C_avg, self.stress, self.temperature)
+        e_prime = y - p_prime
+        SEE_prime = np.sqrt(np.sum(e_prime**2.0) / (X.shape[0] - self.order - 2))
+        ybar = np.mean(y)
+        SST = np.sum((y - ybar)**2.0)
+        R2_heat = 1.0 - np.sum(e_prime**2.0) / SST
+        
+        # Set standard properties
+        self.preds = p
+        self.C_avg = C_avg
+        self.C_heat = {h: b[self.order+1]+b[self.order+1+i+1] for i,h in enumerate(self.heat_indices.keys())}
+        self.polyavg = poly
+        self.R2 = R2
+        self.SSE = SSE
+        self.SEE = SEE
+        self.SEE_heat = SEE_prime
+        self.R2_heat = R2_heat
+
+        return self
+
+class TTP:
+    """
+        Superclass for all time-temperature parameters, currently doesn't do anything
+    """
+    pass
+
+class LarsonMillerParameter(TTP):
+    """
+        Larson-Miller parameters
+    """
+    def stress_transform(self, time, temperature):
+        """
+            Transform the stress 
 
             Parameters:
-                poly:   regression polynomial
-                C:      TTP parameter
-
-            Returns:
-                prediction of log time for each stress
+                time:           time data
+                temperature:    temperature data
         """
-        return np.polyval(poly, np.log10(self.stress)) / self.temperature - C
+        return 1.0 / temperature
+
+    def predict(self, poly, C, stress, temperature):
+        """
+            Make a prediction in log time for a set of points
+
+            Args:
+                poly:           calibrated polynomial
+                C:              calibrated TTP
+                stress:         stress data
+                temperature:    temperature data
+        """
+        return np.polyval(poly, np.log10(stress)) / temperature - C

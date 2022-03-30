@@ -32,9 +32,6 @@ def least_squares(X, y):
     SST = np.dot(y, np.dot(N, y))
     R2 = SSE/SST
 
-    # Modified R2
-    R2_mod = 1.0 - (n-1)/(n-X.shape[1]) * (1 - R2)
-
     # SEE
     SEE = np.sqrt(np.sum(e**2.0) / (X.shape[0] - X.shape[1]))
 
