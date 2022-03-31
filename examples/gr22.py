@@ -6,21 +6,33 @@ sys.path.append('../')
 from pycreep import data, ttp, time_independent
 
 import numpy as np
-import matplotlib.pyplot as plt
+
+import pickle
 
 if __name__ == "__main__":
     df_rupture = data.load_data_from_file("Gr22-rupture.csv")
     df_yield = data.load_data_from_file("Gr22-yield.csv")
 
-    yield_model = time_independent.TimeIndependentCorrelation(df_yield,
-            stress_field = "Yield Strength (MPa)", analysis_temp_units="degC")
+    param = ttp.LarsonMillerParameter()
+    rupture_order = 1
 
-    res = yield_model.polynomial_analysis(5)
-    print(res)
+    fraction = 0.5
 
-    plt.plot(yield_model.temperature, yield_model.stress, 'kx')
-    Ts = np.linspace(400, 700)
-    plt.plot(Ts, np.polyval(res['polyavg'], Ts))
-    plt.plot(Ts, np.polyval([-4.533333e-10, 1.1533333e-6, -1.1723333e-3, 5.949166666e-1, -1.50963333e+2, 1.5581e4], Ts))
+    yield_model = time_independent.TabulatedTimeIndependentCorrelation(
+            np.array([27.0,77,130,180,230,280,330,380,430,480,530,580,630,680,730]) + 273.15,
+            np.array([301.33,291.03,285.8,284.12,283.73,282.87,279.81,272.93,260.89,242.87,218.85,189.69,157.19,123.75,91.9999]),
+            df_yield,
+            stress_field = "Yield Strength (MPa)", analysis_temp_units="K")
+    lower_model = ttp.LotCenteredAnalysis(param, rupture_order, df_rupture)
+    upper_model = ttp.LotCenteredAnalysis(param, rupture_order, df_rupture)
 
-    plt.show()
+    model = ttp.SplitAnalysis(yield_model, fraction, lower_model, upper_model,
+            df_rupture).analyze()
+    
+    print("Upper stress range")
+    print(model.upper_model.report())
+
+    print("")
+    
+    print("Lower stress range")
+    print(model.lower_model.report())

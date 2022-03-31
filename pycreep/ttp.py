@@ -9,6 +9,65 @@ class TTPAnalysis(dataset.DataSet):
         dataset
 
         Args:
+            data:                       dataset as a pandas dataframe
+
+        Keyword Args:
+            time_field (str):           field in array giving time, default is
+                                        "Life (h)"
+            temp_field (str):           field in array giving temperature, default
+                                        is "Temp (C)"
+            stress_field (str):         field in array giving stress, default is
+                                        "Stress (MPa)"
+            heat_field (str):           filed in array giving heat ID, default is
+                                        "Heat/Lot ID"
+            input_temp_units (str):     temperature units, default is "C"
+            input_stress_units (str):   stress units, default is "MPa"
+            input_time_units (str):     time units, default is "hr"
+            analysis_temp_units (str):  temperature units for analysis, 
+                                        default is "K"
+            analysis_stress_units (str):    analysis stress units, default is 
+                                            "MPa"
+            analysis_time_units (str):  analysis time units, default is "hr"
+
+        The setup and analyzed objects are suppose to maintain the following properties:
+            * "preds":      predictions for each point
+            * "C_avg":      overall TTP parameter
+            * "C_heat":     dictionary mapping each heat to the 
+                            lot-specific TTP
+            * "poly_avg":   polynomial coefficients for the average
+                            model
+            * "R2":         coefficient of determination
+            * "SSE":        standard squared error
+            * "SEE":        standard error estimate
+            * "SEE_heat":   SEE without lot centering, i.e. if you have a random heat
+            * "R2_heat":    R2 without lot centering, i.e. if you have a random heat
+    """
+    def __init__(self, data, time_field = "Life (h)", 
+            temp_field = "Temp (C)",
+            stress_field = "Stress (MPa)", heat_field = "Heat/Lot ID",
+            input_temp_units = "degC", input_stress_units = "MPa", 
+            input_time_units = "hrs", analysis_temp_units = "K",
+            analysis_stress_units = "MPa", analysis_time_units = "hrs"):
+        super().__init__(data)
+        
+        self.add_field_units("temperature", temp_field, input_temp_units, 
+                analysis_temp_units)
+        self.add_field_units("stress", stress_field, input_stress_units,
+                analysis_stress_units)
+        self.add_field_units("time", time_field, input_time_units,
+                analysis_time_units)
+        
+        self.add_heat_field(heat_field)
+
+    @property
+    def nheats(self):
+        return len(self.heat_indices.keys())
+
+class PolynomialAnalysis(TTPAnalysis):
+    """
+        Superclass for polynomial TTP analysis 
+
+        Args:
             TTP:                        time-temperature parameter
             order:                      polynomial order
             data:                       dataset as a pandas dataframe
@@ -44,29 +103,11 @@ class TTPAnalysis(dataset.DataSet):
             * "SEE_heat":   SEE without lot centering, i.e. if you have a random heat
             * "R2_heat":    R2 without lot centering, i.e. if you have a random heat
     """
-    def __init__(self, TTP, order, data, time_field = "Life (h)", 
-            temp_field = "Temp (C)",
-            stress_field = "Stress (MPa)", heat_field = "Heat/Lot ID",
-            input_temp_units = "degC", input_stress_units = "MPa", 
-            input_time_units = "hrs", analysis_temp_units = "K",
-            analysis_stress_units = "MPa", analysis_time_units = "hrs"):
-        super().__init__(data)
+    def __init__(self, TTP, order, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
         self.TTP = TTP
         self.order = order
-
-        self.add_field_units("temperature", temp_field, input_temp_units, 
-                analysis_temp_units)
-        self.add_field_units("stress", stress_field, input_stress_units,
-                analysis_stress_units)
-        self.add_field_units("time", time_field, input_time_units,
-                analysis_time_units)
-        
-        self.add_heat_field(heat_field)
-
-    @property
-    def nheats(self):
-        return len(self.heat_indices.keys())
 
     def report(self):
         """
@@ -84,6 +125,16 @@ class TTPAnalysis(dataset.DataSet):
                 "R2_heat": self.R2_heat
                 }
 
+    def __call__(self, stress, temperature):
+        """
+            Alias for self.predict_time(stress, temperature)
+
+            Args:
+                stress:         input stress values
+                temperature:    input temperature values
+        """
+        return self.predict_time(stress, temperature)
+
     def predict_time(self, stress, temperature):
         """
             Predict new times given stress and temperature
@@ -94,7 +145,90 @@ class TTPAnalysis(dataset.DataSet):
         """
         return 10.0**predict(self.polyavg, self.C_avg, stress, temperature)
 
-class UncenteredAnalysis(TTPAnalysis):
+class SplitAnalysis(TTPAnalysis):
+    """
+        Split the data into two halves based on some stress measure
+
+        Args:
+            stress_measure:             a TimeIndependentCorrelation providing
+                                        the stress criteria
+            fraction:                   the threshold is stress_measure(T) * fraction
+            lower_model:                model for stress < threshold
+            upper_mode:                 model for stress >= threshold
+            data:                       dataset as a pandas dataframe
+
+        Keyword Args:
+            time_field (str):           field in array giving time, default is
+                                        "Life (h)"
+            temp_field (str):           field in array giving temperature, default
+                                        is "Temp (C)"
+            stress_field (str):         field in array giving stress, default is
+                                        "Stress (MPa)"
+            heat_field (str):           filed in array giving heat ID, default is
+                                        "Heat/Lot ID"
+            input_temp_units (str):     temperature units, default is "C"
+            input_stress_units (str):   stress units, default is "MPa"
+            input_time_units (str):     time units, default is "hr"
+            analysis_temp_units (str):  temperature units for analysis, 
+                                        default is "K"
+            analysis_stress_units (str):    analysis stress units, default is 
+                                            "MPa"
+            analysis_time_units (str):  analysis time units, default is "hr"
+
+    """
+    def __init__(self, stress_measure, fraction, lower_model, upper_model,
+            *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.stress_measure = stress_measure
+        self.fraction = fraction
+
+        self.lower_model = lower_model
+        self.upper_model = upper_model
+
+    def analyze(self):
+        """
+            Run/re-run analysis
+        """
+        self.stress_measure.analyze()
+
+        # May be a better way to do this?
+        thresh = self.threshold(self.temperature)
+        self.lower_model.data = self.data[self.stress < thresh].reset_index(drop=True)
+        self.lower_model.analyze()
+
+        self.upper_model.data = self.data[self.stress >= thresh].reset_index(drop=True)
+        self.upper_model.analyze()
+
+        return self
+
+    def threshold(self, temperature):
+        """
+            The threshold for switching between the two models
+
+            Args:
+                temperature:    input temperatures
+        """
+        return self.fraction * self.stress_measure.predict(temperature)
+
+    def predict_time(self, stress, temperature):
+        """
+            Predict new times given stress and temperature
+
+            Args:
+                stress:         input stress values
+                temperature:    input temperature values
+        """
+        time = np.zeros_like(stress)
+        
+        thresh = self.threshold(temperature)
+
+        time[stress<thresh] = self.lower_model.predict(stress, temperature)
+        time[stress>=thresh] = self.upper_model.predict(stress, temperature)
+
+        return time
+
+class UncenteredAnalysis(PolynomialAnalysis):
     """
         Do an uncentered analysis of the data
 
@@ -149,7 +283,7 @@ class UncenteredAnalysis(TTPAnalysis):
 
         return self
 
-class LotCenteredAnalysis(TTPAnalysis):
+class LotCenteredAnalysis(PolynomialAnalysis):
     """
         Do an uncentered analysis of the data
 
@@ -186,6 +320,7 @@ class LotCenteredAnalysis(TTPAnalysis):
         # Setup the lot matrix
         C = np.zeros((len(self.stress), self.nheats+1))
         C[:,0] = -1.0
+        
         for i, inds in enumerate(self.heat_indices.values()):
             C[inds,i+1] = -1.0
 

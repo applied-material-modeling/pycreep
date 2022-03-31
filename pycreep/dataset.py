@@ -37,7 +37,8 @@ class DataSet:
                 dname:      heat name in the dataset
         """
         self.fields["heats"] = lambda self, dname=dname: self.data[dname]
-        self.heat_indices = {hi: self.heats.index[self.heats == hi] 
+        self.fields["heat_indices"] = lambda self: {hi: 
+                self.heats.index[self.heats == hi] 
                 for hi in set(self.heats)}
         
     def __getattr__(self, name):

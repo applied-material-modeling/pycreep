@@ -1,6 +1,7 @@
 from pycreep import dataset, methods
 
 import numpy as np
+import scipy.interpolate as inter
 
 class TimeIndependentCorrelation(dataset.DataSet):
     """
@@ -39,23 +40,107 @@ class TimeIndependentCorrelation(dataset.DataSet):
 
         self.add_heat_field(heat_field)
 
-    def polynomial_analysis(self, deg):
+    def __call__(self, T):
         """
-            For now, until I have a better idea of what to do, this just
-            returns a polynomial relating strength to temperature
-            using all the data
+            Alias for self.predict(T)
 
-            Parameters:
-                deg:        degree of polynomial correlation
+            Args:
+                T:      temperature data
         """
-        X = np.vander(self.temperature, deg + 1)
-        b, p, SSE, R2, SEE = methods.least_squares(X, self.stress)
+        return self.predict(T)
 
-        return {
-                "preds": p,
-                "polyavg": b,
-                "R2": R2,
-                "SSE": SSE,
-                "SEE": SEE
-                }
+class PolynomialTimeIndependentCorrelation(TimeIndependentCorrelation):
+    """
+        Class used to correlate time independent/temperature dependent
+        data as a function of temperature using polynomial regression.
 
+        Args:
+            deg:                        polynomial degree
+            data:                       dataset as a pandas dataframe
+
+        Keyword Args:
+            temp_field (str):           field in array giving temperature, default
+                                        is "Temp (C)"
+            stress_field (str):         field in array giving stress, default is
+                                        "Stress (MPa)"
+            heat_field (str):           field in array giving heat ID, default is
+                                        "Heat/Lot ID"
+            input_temp_units (str):     temperature units, default is "C"
+            input_stress_units (str):   stress units, default is "MPa"
+            analysis_temp_units (str):  temperature units for analysis, 
+                                        default is "K"
+            analysis_stress_units (str):    analysis stress units, default is 
+                                            "MPa"
+
+    """
+    def __init__(self, deg, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.deg = deg
+
+    def analyze(self):
+        """
+            Run the stress analysis and store results
+        """
+        X = np.vander(self.temperature, self.deg + 1)
+        self.polyavg, self.preds, self.SSE, self.R2, self.SEE = methods.least_squares(
+                X, self.stress)
+
+        return self
+
+    def predict(self, T):
+        """
+            Predict some new values as a function of temperature
+
+            Args:
+                T:      temperature data
+        """
+        return np.polyval(self.polyavg, T)
+
+class TabulatedTimeIndependentCorrelation(TimeIndependentCorrelation):
+    """
+        Class used to correlate time independent/temperature dependent
+        data as a function of temperature using a user-provided table
+        of values
+
+        Args:
+            temp_table:                 temperature table values
+            stress_table:               stress table values
+            data:                       dataset as a pandas dataframe
+
+        Keyword Args:
+            temp_field (str):           field in array giving temperature, default
+                                        is "Temp (C)"
+            stress_field (str):         field in array giving stress, default is
+                                        "Stress (MPa)"
+            heat_field (str):           field in array giving heat ID, default is
+                                        "Heat/Lot ID"
+            input_temp_units (str):     temperature units, default is "C"
+            input_stress_units (str):   stress units, default is "MPa"
+            analysis_temp_units (str):  temperature units for analysis, 
+                                        default is "K"
+            analysis_stress_units (str):    analysis stress units, default is 
+                                            "MPa"
+
+    """
+    def __init__(self, temp_table, stress_table, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.temp_table = temp_table
+        self.stress_table = stress_table
+
+    def analyze(self):
+        """
+            Run the stress analysis and store results
+        """
+        self.fn = inter.interp1d(self.temp_table, self.stress_table)
+
+        return self
+
+    def predict(self, T):
+        """
+            Predict some new values as a function of temperature
+
+            Args:
+                T:      temperature data
+        """
+        return self.fn(T)
