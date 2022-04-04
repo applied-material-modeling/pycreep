@@ -135,15 +135,47 @@ class PolynomialAnalysis(TTPAnalysis):
         """
         return self.predict_time(stress, temperature)
 
-    def predict_time(self, stress, temperature):
+    def predict_time(self, stress, temperature, confidence = None):
         """
             Predict new times given stress and temperature
 
             Args:
                 stress:         input stress values
                 temperature:    input temperature values
+
+            Keyword Args:
+                confidence:     confidence interval, if None provide
+                                average predictions
         """
-        return 10.0**predict(self.polyavg, self.C_avg, stress, temperature)
+        if confidence is None:
+            h = 0.0
+        else:
+            h = scipy.stats.norm.interval(confidence)[1]
+
+        return 10.0**predict(self.polyavg, self.C_avg - h * self.SEE_heat,
+                stress, temperature)
+
+    def predict_stress(self, time, temperature, confidence = None):
+        """
+            Predict new values of stress given time and temperature
+
+            Args:
+                time:           input time values
+                temperature:    input temperature values
+
+            Keyword Args:
+                confidence:     confidence interval, if None provide
+                                average predictions
+        """
+        # Take the log of time
+        ltime = np.log10(time)
+        
+        # Calculate the TTP
+        TTP = self.TTP.value(self.C_avg, time, temperature)
+
+        # Form the polynomial
+
+
 
 class SplitAnalysis(TTPAnalysis):
     """
@@ -211,20 +243,25 @@ class SplitAnalysis(TTPAnalysis):
         """
         return self.fraction * self.stress_measure.predict(temperature)
 
-    def predict_time(self, stress, temperature):
+    def predict_time(self, stress, temperature, confidence = None):
         """
             Predict new times given stress and temperature
 
             Args:
                 stress:         input stress values
                 temperature:    input temperature values
+
+            Keyword Args:
+                confidence:     requested confidence interval
         """
         time = np.zeros_like(stress)
         
         thresh = self.threshold(temperature)
 
-        time[stress<thresh] = self.lower_model.predict(stress, temperature)
-        time[stress>=thresh] = self.upper_model.predict(stress, temperature)
+        time[stress<thresh] = self.lower_model.predict_time(stress, temperature, 
+                confidence)
+        time[stress>=thresh] = self.upper_model.predict_time(stress, temperature, 
+                confidence)
 
         return time
 
@@ -389,3 +426,15 @@ class LarsonMillerParameter(TTP):
                 temperature:    temperature data
         """
         return np.polyval(poly, np.log10(stress)) / temperature - C
+
+    def value(self, C, time, temperature):
+        """
+            Actually calculate the value of the time-temperature 
+            parameter
+
+            Args:
+                C:              calibrated TTP
+                time:           time values
+                temperature:    temperature values
+        """
+        return temperature * (np.log10(time) + C)
