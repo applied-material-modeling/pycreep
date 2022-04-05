@@ -1,4 +1,9 @@
-def Sc_SectionII_1A_1B(rupture_model, rate_model, temperatures, conf = 0.90):
+from pycreep import units
+
+import numpy as np
+
+def Sc_SectionII_1A_1B(rupture_model, rate_model, temperatures, conf = 0.90,
+        dt = 1e-6):
     """
         Calculate the creep-controlled allowable stress for Tables 1A and
         1B in Section II.  This stress is the lesser of
@@ -24,6 +29,15 @@ def Sc_SectionII_1A_1B(rupture_model, rate_model, temperatures, conf = 0.90):
 
         Keyword Args:
             conf:       desired confidence interval
+            dt:         finite difference value to calculate n
     """
-    # Calculate the values of n
-    pass
+    # Calculate the values of n and Favg
+    times = np.ones_like(temperatures) * 100000.0
+    n = (np.log10(rupture_model.predict_stress((1.0+dt)*times, 
+        temperatures)) - np.log10(rupture_model.predict_stress(times, 
+            temperatures))) / (np.log10((1.0+dt)*times) - np.log10(times))
+    Favg = 10.0**n
+    thresh = units.convert(np.array([815.0]), 
+            "degC", rupture_model.analysis_temp_units)[0]
+    Favg[temperatures < thresh] = 0.67
+    Favg = np.minimum(Favg, 0.67)

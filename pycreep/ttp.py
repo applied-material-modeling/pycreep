@@ -57,6 +57,10 @@ class TTPAnalysis(dataset.DataSet):
         self.add_field_units("time", time_field, input_time_units,
                 analysis_time_units)
         
+        self.analysis_time_units = analysis_time_units
+        self.analysis_temp_units = analysis_temp_units
+        self.analysis_stress_units = analysis_stress_units
+        
         self.add_heat_field(heat_field)
 
     @property
@@ -169,13 +173,32 @@ class PolynomialAnalysis(TTPAnalysis):
         """
         # Take the log of time
         ltime = np.log10(time)
-        
+       
+        if confidence is None:
+            h = 0.0
+        else:
+            h = scipy.stats.norm.interval(confidence)[1]
+
         # Calculate the TTP
-        TTP = self.TTP.value(self.C_avg, time, temperature)
+        TTP = self.TTP.value(self.C_avg - h * self.SEE_heat,
+                time, temperature)
 
-        # Form the polynomial
+        # Solve each one, one at a time, for now
+        # Vectorizing the cases with an analytic solution should be 
+        # possible
+        res = np.zeros_like(ltime)
+        for i in range(len(ltime)):
+            pi = np.copy(self.polyavg)
+            pi[-1] -= TTP[i]
+            rs = np.array(np.roots(pi))
+            if np.all(np.abs(np.imag(rs)) > 0):
+                raise ValueError("Inverting relation to predict stress failed")
+            rs[np.abs(np.imag(rs))>0] = 0
+            rs = np.real(rs)
+            # Need to consider this...
+            res[i] = np.max(rs)
 
-
+        return 10.0**res
 
 class SplitAnalysis(TTPAnalysis):
     """
@@ -264,6 +287,24 @@ class SplitAnalysis(TTPAnalysis):
                 confidence)
 
         return time
+
+    def predict_stress(self, time, temperature, confidence = None):
+        """
+            Predict new values of stress given time and temperature
+
+            Args:
+                time:           input time values
+                temperature:    input temperature values
+
+            Keyword Args:
+                confidence:     confidence interval, if None provide
+                                average predictions
+        """
+        # Do the whole thing twice...
+        upper = self.upper_model.predict_stress(time, temperature, confidence)
+        lower = self.lower_model.predict_stress(time, temperature, confidence)
+
+        return np.minimum(upper, lower)
 
 class UncenteredAnalysis(PolynomialAnalysis):
     """
