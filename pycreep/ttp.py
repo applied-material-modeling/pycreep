@@ -157,7 +157,7 @@ class PolynomialAnalysis(TTPAnalysis):
         else:
             h = scipy.stats.norm.interval(confidence)[1]
 
-        return 10.0**predict(self.polyavg, self.C_avg + h * self.SEE_heat,
+        return 10.0**self.TTP.predict(self.polyavg, self.C_avg + h * self.SEE_heat,
                 stress, temperature)
 
     def predict_stress(self, time, temperature, confidence = None):
