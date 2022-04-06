@@ -3,7 +3,7 @@ from pycreep import units
 import numpy as np
 
 def Sc_SectionII_1A_1B(rupture_model, rate_model, temperatures, conf = 0.90,
-        dt = 1e-6):
+        dt = 1e-6, full_results = False):
     """
         Calculate the creep-controlled allowable stress for Tables 1A and
         1B in Section II.  This stress is the lesser of
@@ -28,8 +28,9 @@ def Sc_SectionII_1A_1B(rupture_model, rate_model, temperatures, conf = 0.90,
             temperatures (np.array):                    temperature values
 
         Keyword Args:
-            conf:       desired confidence interval
-            dt:         finite difference value to calculate n
+            conf:           desired confidence interval
+            dt:             finite difference value to calculate n
+            full_results:   if True, return a detailed results dictionary
     """
     # Calculate the values of n and Favg
     times = np.ones_like(temperatures) * 100000.0
@@ -41,3 +42,26 @@ def Sc_SectionII_1A_1B(rupture_model, rate_model, temperatures, conf = 0.90,
             "degC", rupture_model.analysis_temp_units)[0]
     Favg[temperatures < thresh] = 0.67
     Favg = np.minimum(Favg, 0.67)
+
+    # Calculate Savg and Favg*Savg
+    Savg = rupture_model.predict_stress(times, temperatures)
+    FSavg = Favg * Savg
+    
+    # Calculate Smin and 80%*Smin
+    Smin = rupture_model.predict_stress(times, temperatures, 
+            confidence = conf)
+    FSmin = 0.80*Smin
+
+    # Calculate the creep rate stresses
+    rates = np.ones_like(temperatures) * 1e-5
+    Sc = rate_model.predict_stress(rates, temperatures)
+
+    # Calculate the allowable
+    S = np.minimum(FSavg, np.minimum(FSmin, Sc))
+
+    if full_results:
+        return {"Savg": Savg, "n": n, "Favg": Favg, "FSavg": FSavg,
+                "Smin": Smin, "FSmin": FSmin, "Sc": Sc, "S": S}
+    else:
+        return S
+

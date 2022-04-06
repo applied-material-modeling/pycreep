@@ -2,6 +2,7 @@ from pycreep import units, methods, dataset
 
 import numpy as np
 import numpy.linalg as la
+import scipy.stats
 
 class TTPAnalysis(dataset.DataSet):
     """
@@ -156,7 +157,7 @@ class PolynomialAnalysis(TTPAnalysis):
         else:
             h = scipy.stats.norm.interval(confidence)[1]
 
-        return 10.0**predict(self.polyavg, self.C_avg - h * self.SEE_heat,
+        return 10.0**predict(self.polyavg, self.C_avg + h * self.SEE_heat,
                 stress, temperature)
 
     def predict_stress(self, time, temperature, confidence = None):
@@ -180,7 +181,7 @@ class PolynomialAnalysis(TTPAnalysis):
             h = scipy.stats.norm.interval(confidence)[1]
 
         # Calculate the TTP
-        TTP = self.TTP.value(self.C_avg - h * self.SEE_heat,
+        TTP = self.TTP.value(self.C_avg + h * self.SEE_heat,
                 time, temperature)
 
         # Solve each one, one at a time, for now

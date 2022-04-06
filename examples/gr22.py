@@ -77,6 +77,7 @@ if __name__ == "__main__":
 
     print("Allowable stress values")
     Ts = np.array([400,425,450,475,500,525,550,575,600,625,650]) + 273.15
-    S = allowables.Sc_SectionII_1A_1B(rupture_model, rate_model, Ts)
+    res = allowables.Sc_SectionII_1A_1B(rupture_model, rate_model, Ts, 
+            full_results = True)
 
-    print(S)
+    print(res)
