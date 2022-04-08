@@ -1,3 +1,4 @@
 pint
 numpy
 pandas
+openpyxl

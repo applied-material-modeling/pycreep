@@ -3,6 +3,7 @@ from pycreep import units, methods, dataset
 import numpy as np
 import numpy.linalg as la
 import scipy.stats
+from openpyxl import Workbook
 
 class TTPAnalysis(dataset.DataSet):
     """
@@ -68,6 +69,19 @@ class TTPAnalysis(dataset.DataSet):
     def nheats(self):
         return len(self.heat_indices.keys())
 
+    def excel_report(self, fname):
+        """
+            Write out an excel workbook 
+        """
+        wb = Workbook()
+
+        tab = wb.active
+        tab.title = "Report"
+
+        self._write_excel_report(tab)
+
+        wb.save(fname)
+
 class PolynomialAnalysis(TTPAnalysis):
     """
         Superclass for polynomial TTP analysis 
@@ -131,6 +145,52 @@ class PolynomialAnalysis(TTPAnalysis):
                 "heat_count": {h: len(i) for h,i in self.heat_indices.items()},
                 "heat_rms": self.heat_rms
                 }
+
+    def _write_excel_report(self, tab):
+        """
+            Write an excel report to a given tab
+
+            Args:
+                tab (openpyxl tab):     tab handle to write to
+        """
+        tab['A1'] = "Regression results:"
+        tab['A2'] = "Coefficient"
+        tab['B2'] = "Value"
+        of = 3
+        for i,p in enumerate(self.polyavg[::-1]):
+            tab.cell(row=i+3, column = 1, value = "a%i"%i)
+            tab.cell(row=i+3, column = 2, value = p)
+        of = 3 + len(self.polyavg)
+        tab.cell(row=of, column = 1, value = "Overall C:")
+        tab.cell(row=of, column = 2, value = self.C_avg)
+        of += 2
+
+        tab.cell(row=of, column = 1, value = "Statistics:")
+        of += 1
+        tab.cell(row=of, column = 1, value = "R2")
+        tab.cell(row=of, column = 2, value = self.R2_heat)
+        of += 1
+        tab.cell(row=of, column = 1, value = "SEE")
+        tab.cell(row=of, column = 2, value = self.SEE_heat)
+        of += 2
+
+        tab.cell(row=of, column = 1, value = "Heat summary:")
+        of += 1
+        tab.cell(row=of, column = 1, value = "Heat")
+        tab.cell(row=of, column = 2, value = "Count")
+        tab.cell(row=of, column = 3, value = "Lot C")
+        tab.cell(row=of, column = 4, value = "Lot RMS error")
+        of +=1 
+        
+        heat_count = {h: len(i) for h,i in self.heat_indices.items()}
+
+        for heat in sorted(self.C_heat.keys()):
+            tab.cell(row=of, column = 1, value = heat)
+            tab.cell(row=of, column = 2, value = heat_count[heat])
+            tab.cell(row=of, column = 3, value = self.C_heat[heat])
+            tab.cell(row=of, column = 4, value = self.heat_rms[heat])
+            of += 1
+
 
     def __call__(self, stress, temperature):
         """
