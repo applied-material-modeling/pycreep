@@ -60,7 +60,7 @@ def Sc_SectionII_1A_1B(rupture_model, rate_model, temperatures, conf = 0.90,
     S = np.minimum(FSavg, np.minimum(FSmin, Sc))
 
     if full_results:
-        return {"Savg": Savg, "n": n, "Favg": Favg, "FSavg": FSavg,
+        return {"Savg": Savg, "n": -1.0/n, "Favg": Favg, "FSavg": FSavg,
                 "Smin": Smin, "FSmin": FSmin, "Sc": Sc, "S": S}
     else:
         return S
