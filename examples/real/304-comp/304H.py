@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import sys
-sys.path.append('../..')
+sys.path.append('../../..')
 
 from pycreep import data, ttp
 
@@ -13,5 +13,6 @@ if __name__ == "__main__":
 
     uncentered = ttp.UncenteredAnalysis(param, order, df).analyze()
     centered = ttp.LotCenteredAnalysis(param, order, df).analyze()
-    
-    print(centered.report())
+
+    uncentered.excel_report("uncentered.xlsx")
+    centered.excel_report("centered.xlsx")

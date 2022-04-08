@@ -13,4 +13,4 @@ if __name__ == "__main__":
 
     uncentered = ttp.UncenteredAnalysis(param, order, df).analyze()
     
-    print(uncentered.report())
+    uncentered.excel_report("uncentered.xlsx")

@@ -12,3 +12,5 @@ if __name__ == "__main__":
     order = 2
 
     centered = ttp.LotCenteredAnalysis(param, order, df).analyze()
+
+    centered.excel_report("centered.xlsx")

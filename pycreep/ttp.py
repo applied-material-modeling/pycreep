@@ -69,18 +69,39 @@ class TTPAnalysis(dataset.DataSet):
     def nheats(self):
         return len(self.heat_indices.keys())
 
-    def excel_report(self, fname):
+    def excel_report(self, fname, tabname = "Rupture"):
         """
             Write out an excel workbook 
+
+            Args:
+                fname:      filename to use
+            
+            Kwargs:
+                tabname:    what tab name to use
         """
         wb = Workbook()
 
-        tab = wb.active
-        tab.title = "Report"
+        self.write_excel_report(wb, tabname = tabname)
 
-        self._write_excel_report(tab)
+        # Get rid of the dumb default tab
+        del wb[wb.sheetnames[0]]
 
         wb.save(fname)
+
+    def write_excel_report(self, wb, tabname = "Rupture"):
+        """
+            Write to a particular excel workbook
+
+            Args:
+                wb:         workbook object
+
+            Kwargs:
+                tabname:    what tab name to use
+
+        """
+        tab = wb.create_sheet(tabname)
+
+        self._write_excel_report(tab)
 
 class PolynomialAnalysis(TTPAnalysis):
     """
@@ -303,6 +324,23 @@ class SplitAnalysis(TTPAnalysis):
 
         self.lower_model = lower_model
         self.upper_model = upper_model
+
+    def write_excel_report(self, wb, tabname = "Rupture"):
+        """
+            Write to a particular excel workbook
+
+            Args:
+                wb:         workbook object
+
+            Kwargs:
+                tabname:    what tab name to use
+
+        """
+        tab = wb.create_sheet(tabname + ", upper stress range")
+        self.upper_model._write_excel_report(tab)
+
+        tab = wb.create_sheet(tabname + ", lower stress range")
+        self.lower_model._write_excel_report(tab)
 
     def analyze(self):
         """

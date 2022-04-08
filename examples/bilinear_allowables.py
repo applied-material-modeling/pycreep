@@ -3,7 +3,7 @@
 import sys
 sys.path.append('..')
 
-from pycreep import data, ttp, time_independent, allowables
+from pycreep import data, ttp, time_independent, allowables, reports
 
 import numpy as np
 
@@ -40,17 +40,6 @@ if __name__ == "__main__":
     rupture_model = ttp.SplitAnalysis(yield_model, fraction, 
             rupture_lower_model, rupture_upper_model,df_data).analyze()
     
-    print("Creep rupture")
-    print("")
-
-    print("Upper stress range")
-    print(rupture_model.upper_model.report())
-
-    print("")
-    
-    print("Lower stress range")
-    print(rupture_model.lower_model.report())
-
     # Creep rate analysis
     rate_lower_model = ttp.UncenteredAnalysis(param, rate_order, 
             df_data, time_field = 'Creep rate (%/hr)')
@@ -60,28 +49,12 @@ if __name__ == "__main__":
             rate_lower_model, rate_upper_model,df_data,
             time_field = "Creep rate (%/hr)").analyze()
     
-    print("")
-    print("----------------------------------------------------------")
-    print("")
 
-    print("Creep rate")
-    print("")
-
-    print("Upper stress range")
-    print(rate_model.upper_model.report())
-
-    print("")
-    
-    print("Lower stress range")
-    print(rate_model.lower_model.report())
-
-    print("")
-    print("----------------------------------------------------------")
-    print("")
-
-    print("Allowable stress values")
-    Ts = np.array([400,425,450,475,500,525,550,575,600,625,650]) + 273.15
+    Ts = np.array([500,525,550,575,600,625,650,700,750.0]) + 273.15
     res = allowables.Sc_SectionII_1A_1B(rupture_model, rate_model, Ts, 
             full_results = True)
+    times = np.array([1,3,10,30,100,300,1000,3000,10000,30000,100000,300000.0])
 
-    print(res)
+
+    reports.write_complete_report("bilinear_report.xlsx", rupture_model,
+            rate_model, yield_model, Ts, times)
