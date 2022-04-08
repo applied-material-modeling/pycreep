@@ -127,7 +127,9 @@ class PolynomialAnalysis(TTPAnalysis):
                 "SSE": self.SSE,
                 "SEE": self.SEE,
                 "SEE_heat": self.SEE_heat,
-                "R2_heat": self.R2_heat
+                "R2_heat": self.R2_heat,
+                "heat_count": {h: len(i) for h,i in self.heat_indices.items()},
+                "heat_rms": self.heat_rms
                 }
 
     def __call__(self, stress, temperature):
@@ -359,6 +361,8 @@ class UncenteredAnalysis(PolynomialAnalysis):
         self.SEE = SEE
         self.SEE_heat = SEE
         self.R2_heat = R2
+        rms = np.sqrt(np.mean((p - y)**2.0))
+        self.heat_rms = {h: rms for h in  self.heat_indices.keys()}
 
         return self
 
@@ -434,6 +438,8 @@ class LotCenteredAnalysis(PolynomialAnalysis):
         self.SEE = SEE
         self.SEE_heat = SEE_prime
         self.R2_heat = R2_heat
+        self.heat_rms = {h: np.sqrt(np.mean(e_prime[inds]**2.0)) for 
+                h,inds in self.heat_indices.items()}
 
         return self
 
