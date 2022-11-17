@@ -65,10 +65,6 @@ class TTPAnalysis(dataset.DataSet):
         
         self.add_heat_field(heat_field)
 
-    @property
-    def nheats(self):
-        return len(self.heat_indices.keys())
-
     def excel_report(self, fname, tabname = "Rupture"):
         """
             Write out an excel workbook 

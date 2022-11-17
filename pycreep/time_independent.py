@@ -76,14 +76,24 @@ class PolynomialTimeIndependentCorrelation(TimeIndependentCorrelation):
     def __init__(self, deg, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.deg = deg
+        self.heat_correlations = {}
+        self.heat_correlation_data = {}
 
     def analyze(self):
         """
             Run the stress analysis and store results
         """
-        X = np.vander(self.temperature, self.deg + 1)
-        self.polyavg, self.preds, self.SSE, self.R2, self.SEE = methods.least_squares(
-                X, self.stress)
+        # Overall correlation 
+        self.polyavg, self.preds, self.SSE, self.R2, self.SEE = methods.polynomial_fit(
+                self.temperature, self.stress, self.deg)
+
+        # Heat-specific correlations 
+        for heat in self.unique_heats:
+            polyavg, preds, SSE, R2, SEE = methods.polynomial_fit(
+                    self.temperature[self.heat_indices[heat]],
+                    self.stress[self.heat_indices[heat]], self.deg)
+            self.heat_correlations[heat] = polyavg 
+            self.heat_correlation_data[heat] = (preds, SSE, R2, SEE)
 
         return self
 
@@ -95,6 +105,16 @@ class PolynomialTimeIndependentCorrelation(TimeIndependentCorrelation):
                 T:      temperature data
         """
         return np.polyval(self.polyavg, T)
+
+    def predict_heat(self, heat, T):
+        """
+            Predict heat-specific values as a function of temperature 
+
+            Args:
+                heat:   heat ID
+                T:      temperature
+        """
+        return np.polyval(self.heat_correlations[heat], T)
 
 class TabulatedTimeIndependentCorrelation(TimeIndependentCorrelation):
     """

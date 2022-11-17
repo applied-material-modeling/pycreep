@@ -50,3 +50,17 @@ class DataSet:
         """
         return self.fields[name](self)
 
+    @property
+    def unique_heats(self):
+        """
+            Return the heat keys
+        """
+        return self.heat_indices.keys()
+
+    @property
+    def nheats(self):
+        """
+            Number of heats in the dataset
+        """
+        return len(self.unique_heats)
+
