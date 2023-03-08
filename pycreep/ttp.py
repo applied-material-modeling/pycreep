@@ -388,6 +388,7 @@ class SplitAnalysis(TTPAnalysis):
     def predict_stress(self, time, temperature, confidence = None):
         """
             Predict new values of stress given time and temperature
+            in a smooth way
 
             Args:
                 time:           input time values
@@ -401,7 +402,30 @@ class SplitAnalysis(TTPAnalysis):
         upper = self.upper_model.predict_stress(time, temperature, confidence)
         lower = self.lower_model.predict_stress(time, temperature, confidence)
 
-        return np.minimum(upper, lower)
+        return np.minimum(upper,lower)
+
+    def predict_stress_discontinuous(self, time, temperature, confidence = None):
+        """
+            Predict new values of stress given time and temperature
+            in an accurate but discontinuous way
+
+            Args:
+                time:           input time values
+                temperature:    input temperature values
+
+            Keyword Args:
+                confidence:     confidence interval, if None provide
+                                average predictions
+        """
+        # Do the whole thing twice...
+        upper = self.upper_model.predict_stress(time, temperature, confidence)
+        lower = self.lower_model.predict_stress(time, temperature, confidence)
+
+        thresh = self.threshold(temperature)
+
+        upper[upper<thresh] = lower[upper<thresh]
+
+        return upper
 
 class UncenteredAnalysis(PolynomialAnalysis):
     """
