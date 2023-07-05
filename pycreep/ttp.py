@@ -423,9 +423,15 @@ class SplitAnalysis(TTPAnalysis):
 
         thresh = self.threshold(temperature)
 
-        upper[upper<thresh] = lower[upper<thresh]
+        res = np.zeros_like(upper)
+        res[upper>=thresh] = upper[upper>=thresh]
+        res[lower<thresh] = lower[lower<thresh]
 
-        return upper
+        neither = np.logical_and(upper<thresh, lower>=thresh)
+
+        res[neither] = 0.5*upper[neither] + 0.5*lower[neither]
+
+        return res
 
 class UncenteredAnalysis(PolynomialAnalysis):
     """

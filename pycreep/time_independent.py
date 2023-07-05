@@ -1,4 +1,4 @@
-from pycreep import dataset, methods
+from pycreep import dataset, methods, units
 
 import numpy as np
 from numpy.polynomial import Polynomial
@@ -47,8 +47,7 @@ class DataDrivenTimeIndependentCorrelation(dataset.DataSet, TimeIndependentCorre
     def __init__(self, data, temp_field = "Temp (C)",
             stress_field = "Stress (MPa)", heat_field = "Heat/Lot ID",
             input_temp_units = "degC", input_stress_units = "MPa", 
-            analysis_temp_units = "K",
-            analysis_stress_units = "MPa"):
+            analysis_temp_units = "K", analysis_stress_units = "MPa"):
         super().__init__(data)
 
         self.add_field_units("temperature", temp_field, input_temp_units, 
@@ -129,9 +128,34 @@ class UserProvidedTimeIndependentCorrelation(TimeIndependentCorrelation):
     """
         Superclass where the user provides the correlation directly
         for all heats.
+
+        Keyword Args:
+            input_temp_units (str):     temperature units, default is "C"
+            input_stress_units (str):   stress units, default is "MPa"
+            analysis_temp_units (str):  temperature units for analysis, 
+                                        default is "K"
+            analysis_stress_units (str):    analysis stress units, default is 
+                                            "MPa"
     """
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, input_temp_units = "degC", input_stress_units = "MPa", 
+                analysis_temp_units = "K", analysis_stress_units = "MPa", **kwargs):
         super().__init__(*args, **kwargs)
+
+        self.corr_temp = input_temp_units
+        self.in_temp = analysis_temp_units
+        self.corr_stress = input_stress_units
+        self.in_stress = analysis_stress_units
+
+        self.unique_heats = []
+
+    def predict(self, T):
+        """
+            Predict some new values as a function of temperature
+
+            Args:
+                T:      temperature data
+        """
+        return units.convert(self.fn(units.convert(T, self.in_temp, self.corr_temp)), self.corr_stress, self.in_stress)
 
     def predict_heat(self, heat, T):
         """
@@ -167,15 +191,6 @@ class TabulatedTimeIndependentCorrelation(UserProvidedTimeIndependentCorrelation
 
         return self
 
-    def predict(self, T):
-        """
-            Predict some new values as a function of temperature
-
-            Args:
-                T:      temperature data
-        """
-        return self.fn(T)
-
 class UserPolynomialTimeIndependentCorrelation(UserProvidedTimeIndependentCorrelation):
     """
         User provides a temperature -> value correlation directly
@@ -194,11 +209,25 @@ class UserPolynomialTimeIndependentCorrelation(UserProvidedTimeIndependentCorrel
         """
         self.fn = Polynomial(self.coefs[::-1])
 
-    def predict(self, T):
-        """
-            Predict some new values as a function of temperature
+class ASMEPolynomialTimeIndependentCorrelation(UserProvidedTimeIndependentCorrelation):
+    """
+        ASME type correlation of
 
-            Args:
-                T:      temperature data
+        F * S * (p[0] * (T/T0)**0 + p[1] * (T/T0)**1 + ...)
+
+        Args:
+            poly:       polynomial in standard
+    """
+    def __init__(self, F, S0, T0, poly, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self.F = F
+        self.S0 = S0
+        self.T0 = T0
+        self.coefs = poly
+
+    def analyze(self):
         """
-        return self.fn(T)
+            Run the stress analysis and store results
+        """
+        self.fn = lambda T: self.F * self.S0 * np.polyval(self.coefs[::-1], T/self.T0)
