@@ -39,6 +39,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
             analysis_stress_units (str):    analysis stress units, default is 
                                             "MPa"
             analysis_time_units (str):  analysis time units, default is "hr"
+            predict_norm:               strength object to use for predictions, defaults to norm_data
 
         The setup and analyzed objects are suppose to maintain the following properties:
             * "preds":      predictions for each point
@@ -52,7 +53,8 @@ class WilshireAnalysis(ttp.TTPAnalysis):
             * "SEE":        standard error estimate
     """
     def __init__(self, norm_data, *args, sign_Q = "-",  allow_avg_norm = True,
-            energy_units = "kJ/mol", Q_guess = 250.0, Q_mult = 10.0, Q_dev = 0.25, **kwargs):
+            energy_units = "kJ/mol", Q_guess = 250.0, Q_mult = 10.0, Q_dev = 0.25,
+            predict_norm = None, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.norm_data = norm_data 
@@ -70,6 +72,11 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         self.Q_guess = Q_guess
         self.Q_mult = Q_mult
         self.Q_dev = Q_dev
+
+        if predict_norm is None:
+            self.predict_norm = norm_data
+        else:
+            self.predict_norm = predict_norm
 
     def _write_excel_report(self, tab):
         """
@@ -120,6 +127,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         """
         # Make sure the normalization model is current
         self.norm_data.analyze()
+        self.predict_norm.analyze()
 
         # Form the normalized stresses 
         y = np.copy(self.stress)
@@ -208,7 +216,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
 
         sr = np.exp(-np.exp(y))
 
-        tensile_strength = self.norm_data.predict(temperature)
+        tensile_strength = self.predict_norm.predict(temperature)
 
         return sr * tensile_strength
 
@@ -231,7 +239,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         
         delta = self.SEE * h
 
-        tensile_strength = self.norm_data.predict(temperature)
+        tensile_strength = self.predict_norm.predict(temperature)
         y = np.log(-np.log(stress/tensile_strength))
         
         x = (y - delta - np.log(self.k)) / self.u
