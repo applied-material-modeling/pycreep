@@ -40,6 +40,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
                                             "MPa"
             analysis_time_units (str):  analysis time units, default is "hr"
             predict_norm:               strength object to use for predictions, defaults to norm_data
+            ls_ratio_max (float):       max log stress ratio to allow
 
         The setup and analyzed objects are suppose to maintain the following properties:
             * "preds":      predictions for each point
@@ -53,8 +54,8 @@ class WilshireAnalysis(ttp.TTPAnalysis):
             * "SEE":        standard error estimate
     """
     def __init__(self, norm_data, *args, sign_Q = "-",  allow_avg_norm = True,
-            energy_units = "kJ/mol", Q_guess = 250.0, Q_mult = 10.0, Q_dev = 0.25,
-            predict_norm = None, **kwargs):
+            energy_units = "kJ/mol", Q_guess = 200.0, Q_mult = 10.0, Q_dev = 0.25,
+            predict_norm = None, ls_ratio_max = 0.99, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.norm_data = norm_data 
@@ -72,6 +73,8 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         self.Q_guess = Q_guess
         self.Q_mult = Q_mult
         self.Q_dev = Q_dev
+
+        self.ls_ratio_max = ls_ratio_max
 
         if predict_norm is None:
             self.predict_norm = norm_data
@@ -101,7 +104,10 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         tab.cell(row=of, column = 2, value = self.R2)
         of += 1
         tab.cell(row=of, column = 1, value = "SEE")
-        tab.cell(row=of, column = 2, value = self.SEE)
+        tab.cell(row=of, column = 2, value = self.SEE_avg)
+        of += 1 
+        tab.cell(row=of, column = 1, value = "SEE (log10 time)")
+        tab.cell(row=of, column = 2, value = self.SEE_avg_log_time)
         of += 2
 
         tab.cell(row=of, column = 1, value = "Heat summary:")
@@ -117,7 +123,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         for heat in sorted(self.Q_heat.keys()):
             tab.cell(row=of, column = 1, value = heat)
             tab.cell(row=of, column = 2, value = heat_count[heat])
-            tab.cell(row=of, column = 3, value = self.Q_avg + self.Q_heat[heat])
+            tab.cell(row=of, column = 3, value = self.Q_heat[heat])
             tab.cell(row=of, column = 4, value = self.heat_rms[heat])
             of += 1
 
@@ -139,45 +145,55 @@ class WilshireAnalysis(ttp.TTPAnalysis):
                 y[inds] /= self.norm_data.predict(self.temperature[inds])
             else:
                 raise ValueError("Heat %s not in time independent data" % heat)
-        
+
+        # In some cases this can happen
+        y = np.minimum(self.ls_ratio_max, y)
+
         # Wilshire correlates on the log of the log
         y = np.log(-np.log(y)) 
 
         # Form the (unmodified) x values 
         x = np.log(self.time)
 
-        # Function which maps the unmodified x values to the actual x values for regression
-        def map_fn(xp, X):
-            Q_mean = X[0]
-            Q_vals = np.full((len(xp),), Q_mean)
-            for i,heat in enumerate(self.unique_heats):
-                inds = self.heat_indices[heat]
-                Q_vals[inds] += X[1+i]
+        # Setup the regression matrix
+        X = np.zeros((len(x), 2 + len(self.unique_heats)))
+        X[:,0] = 1.0
+        X[:,1] = x
+        for i, heat in enumerate(self.unique_heats):
+            inds = self.heat_indices[heat]
+            X[inds,2+i] = self.sign_Q / (self.R * self.temperature[inds])
 
-            return xp + self.sign_Q* Q_vals / (self.temperature * self.R)
 
-        # A guess at Q, this could be difficult
-        X0 = np.zeros((self.nheats+1))
-        X0[0] = self.Q_guess
-
-        bounds = [(0,self.Q_mult*self.Q_guess)] + [(-self.Q_guess*self.Q_dev,self.Q_guess*self.Q_dev)] * self.nheats
-        
         # Solve for the optimal heat-specific Q values and coefficients 
-        self.X, self.coefs, preds, self.SSE, self.R2, self.SEE = methods.optimize_polynomial_fit(x, y, 1, X0, bounds, map_fn)
+        params, preds, self.SSE, self.R2, self.SEE = methods.least_squares(X, y)
 
-        # Save the x and y coordinates of each point 
-        self.x_points = map_fn(x, self.X)
+        # Extract the parameter values
+        self.k = np.exp(params[0])
+        self.u = params[1]
+        self.Q_heat = {heat: params[i+2] / self.u for i,heat in enumerate(self.unique_heats)}
+        self.Q_avg = np.sum([self.Q_heat[heat] * len(self.heat_indices[heat]) for i,heat in enumerate(self.unique_heats)]) / len(y) 
+       
+        # Save the x and y points (with the heat-specific values) for plotting
+        Q_full = np.zeros_like(y)
+        for heat in self.unique_heats:
+            Q_full[self.heat_indices[heat]] = self.Q_heat[heat]
+        self.x_points = np.log(self.time) + self.sign_Q * Q_full / (self.temperature * self.R)
         self.y_points = y
 
-        # Extract the heat specific Q values and the "actual" coefficients
-        self.Q_avg = self.X[0]
-        self.Q_heat = {heat: self.X[i+1] for i,heat in enumerate(self.unique_heats)}
-
-        self.k = np.exp(self.coefs[1])
-        self.u = self.coefs[0]
-
+        # Extract heat specific RMS
         self.heat_rms = {h: np.sqrt(np.mean((preds[inds] - y[inds])**2.0)) for 
                 h,inds, in self.heat_indices.items()}
+
+        # Calculate the all heat/average SEE
+        tensile_strength = self.predict_norm.predict(self.temperature)
+        y_pred_avg = np.log(-np.log(self.predict_stress(self.time, self.temperature)/tensile_strength))
+        y_avg = np.log(-np.log(self.stress/tensile_strength))
+
+        self.SEE_avg = np.sqrt(np.sum((y - y_pred_avg)**2.0) / (len(x) - 3.0))
+
+        # Calculate Sam's SEE metrics
+        times_prime = np.nan_to_num(self.predict_time(self.stress, self.temperature))
+        self.SEE_avg_log_time = np.sqrt(np.sum((np.log10(np.maximum(self.time, 1.0)) - np.log10(np.maximum(times_prime, 1.0)))**2.0) / (len(x) -3.0))
 
         return self
 
@@ -237,7 +253,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         else:
             h = scipy.stats.norm.interval(confidence)[1]
         
-        delta = self.SEE * h
+        delta = self.SEE_avg * h
 
         tensile_strength = self.predict_norm.predict(temperature)
         y = np.log(-np.log(stress/tensile_strength))

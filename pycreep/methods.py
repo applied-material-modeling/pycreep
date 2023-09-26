@@ -63,12 +63,10 @@ def polynomial_fit(x, y, deg):
     e = y - p
 
     # SSE
-    n = len(y)
-    N = np.eye(n) - np.ones((n,n))/n
-    SSE = np.dot(p, np.dot(N, p))
+    SSE = np.dot(p,p - np.mean(p))
 
     # R2
-    SST = np.dot(y, np.dot(N, y))
+    SST = np.dot(y, y - np.mean(y))
     R2 = SSE/SST
 
     # SEE
