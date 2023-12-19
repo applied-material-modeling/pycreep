@@ -20,9 +20,6 @@ class WilshireAnalysis(ttp.TTPAnalysis):
             allow_avg_norm (str):       if True, fall back on the all-heat average correlation for
                                         normalization
             energy_units (str):         units for activation energy, default "kJ/mol"
-            Q_guess (float):            guess at average activation energy
-            Q_mult (float):             upper bound on Q = Q_guess * Q_mult
-            Q_dev (float):              bounds for heat-specific Q, [-Q_dev * Q_guess, Q_dev * Q_guess]
             time_field (str):           field in array giving time, default is
                                         "Life (h)"
             temp_field (str):           field in array giving temperature, default
@@ -41,6 +38,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
             analysis_time_units (str):  analysis time units, default is "hr"
             predict_norm:               strength object to use for predictions, defaults to norm_data
             ls_ratio_max (float):       max log stress ratio to allow
+            override_Q (None or dict):  if provided, dictionary of heat-specific Q values to use instead of regressing
 
         The setup and analyzed objects are suppose to maintain the following properties:
             * "preds":      predictions for each point
@@ -54,8 +52,8 @@ class WilshireAnalysis(ttp.TTPAnalysis):
             * "SEE":        standard error estimate
     """
     def __init__(self, norm_data, *args, sign_Q = "-",  allow_avg_norm = True,
-            energy_units = "kJ/mol", Q_guess = 200.0, Q_mult = 10.0, Q_dev = 0.25,
-            predict_norm = None, ls_ratio_max = 0.99, **kwargs):
+            energy_units = "kJ/mol",
+            predict_norm = None, ls_ratio_max = 0.99, override_Q = None, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.norm_data = norm_data 
@@ -70,9 +68,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
 
         self.R = units.convert(R, R_units, energy_units+"/"+self.analysis_temp_units)
 
-        self.Q_guess = Q_guess
-        self.Q_mult = Q_mult
-        self.Q_dev = Q_dev
+        self.override_Q = override_Q
 
         self.ls_ratio_max = ls_ratio_max
 
@@ -155,22 +151,30 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         # Form the (unmodified) x values 
         x = np.log(self.time)
 
-        # Setup the regression matrix
-        X = np.zeros((len(x), 2 + len(self.unique_heats)))
-        X[:,0] = 1.0
-        X[:,1] = x
-        for i, heat in enumerate(self.unique_heats):
-            inds = self.heat_indices[heat]
-            X[inds,2+i] = self.sign_Q / (self.R * self.temperature[inds])
-
-
-        # Solve for the optimal heat-specific Q values and coefficients 
-        params, preds, self.SSE, self.R2, self.SEE = methods.least_squares(X, y)
+        if self.override_Q:
+            Qs = np.zeros_like(x)
+            for heat in self.unique_heats:
+                Qs[self.heat_indices[heat]] = self.override_Q[heat]
+            X = np.zeros((len(x), 2))
+            X[:,0] = 1.0
+            X[:,1] = x + self.sign_Q * Qs / (self.R * self.temperature)
+            params, preds, self.SSE, self.R2, self.SEE = methods.least_squares(X, y)
+            self.Q_heat = self.override_Q
+        else:
+            # Setup the regression matrix
+            X = np.zeros((len(x), 2 + len(self.unique_heats)))
+            X[:,0] = 1.0
+            X[:,1] = x
+            for i, heat in enumerate(self.unique_heats):
+                inds = self.heat_indices[heat]
+                X[inds,2+i] = self.sign_Q / (self.R * self.temperature[inds])
+            # Solve for the optimal heat-specific Q values and coefficients 
+            params, preds, self.SSE, self.R2, self.SEE = methods.least_squares(X, y)
+            self.Q_heat = {heat: params[i+2] / params[1] for i,heat in enumerate(self.unique_heats)}
 
         # Extract the parameter values
         self.k = np.exp(params[0])
         self.u = params[1]
-        self.Q_heat = {heat: params[i+2] / self.u for i,heat in enumerate(self.unique_heats)}
         self.Q_avg = np.sum([self.Q_heat[heat] * len(self.heat_indices[heat]) for i,heat in enumerate(self.unique_heats)]) / len(y) 
        
         # Save the x and y points (with the heat-specific values) for plotting
