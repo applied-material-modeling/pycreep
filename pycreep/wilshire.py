@@ -53,7 +53,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
     """
     def __init__(self, norm_data, *args, sign_Q = "-",  allow_avg_norm = True,
             energy_units = "kJ/mol",
-            predict_norm = None, ls_ratio_max = 0.99, override_Q = None, **kwargs):
+            predict_norm = None, ls_ratio_max = 0.99, override_Q = None, min_time = 1e-20, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.norm_data = norm_data 
@@ -76,6 +76,8 @@ class WilshireAnalysis(ttp.TTPAnalysis):
             self.predict_norm = norm_data
         else:
             self.predict_norm = predict_norm
+
+        self.min_time = min_time
 
     def _write_excel_report(self, tab):
         """
@@ -197,7 +199,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
 
         # Calculate Sam's SEE metrics
         times_prime = np.nan_to_num(self.predict_time(self.stress, self.temperature))
-        self.SEE_avg_log_time = np.sqrt(np.sum((np.log10(np.maximum(self.time, 1.0)) - np.log10(np.maximum(times_prime, 1.0)))**2.0) / (len(x) -3.0))
+        self.SEE_avg_log_time = np.sqrt(np.sum((np.log10(np.maximum(self.time, self.min_time)) - np.log10(np.maximum(times_prime, self.min_time)))**2.0) / (len(x) -3.0))
 
         return self
 
