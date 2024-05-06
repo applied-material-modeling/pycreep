@@ -280,6 +280,21 @@ class PolynomialAnalysis(TTPAnalysis):
 
         return 10.0**res
 
+    def predict_stress_discontinuous(self, time, temperature, confidence = None):
+        """
+            Predict new values of stress given time and temperature
+            in an accurate but discontinuous way
+
+            Args:
+                time:           input time values
+                temperature:    input temperature values
+
+            Keyword Args:
+                confidence:     confidence interval, if None provide
+                                average predictions
+        """
+        return self.predict_stress(time, temperature, confidence=confidence)
+
 class SplitAnalysis(TTPAnalysis):
     """
         Split the data into two halves based on some stress measure
@@ -378,10 +393,11 @@ class SplitAnalysis(TTPAnalysis):
         
         thresh = self.threshold(temperature)
 
+
         time[stress<thresh] = self.lower_model.predict_time(stress, temperature, 
-                confidence)
+                confidence)[stress<thresh]
         time[stress>=thresh] = self.upper_model.predict_time(stress, temperature, 
-                confidence)
+                confidence)[stress>=thresh]
 
         return time
 
