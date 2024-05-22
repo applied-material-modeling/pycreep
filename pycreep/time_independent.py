@@ -1,9 +1,27 @@
-from pycreep import dataset, methods
+from pycreep import dataset, methods, units
 
 import numpy as np
+from numpy.polynomial import Polynomial
 import scipy.interpolate as inter
 
-class TimeIndependentCorrelation(dataset.DataSet):
+class TimeIndependentCorrelation:
+    """
+        Class used to correlate time independent/temperature dependent
+        data as a function of temperature.
+    """
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self, T):
+        """
+            Alias for self.predict(T)
+
+            Args:
+                T:      temperature data
+        """
+        return self.predict(T)
+
+class DataDrivenTimeIndependentCorrelation(dataset.DataSet, TimeIndependentCorrelation):
     """
         Class used to correlate time independent/temperature dependent
         data as a function of temperature.
@@ -29,8 +47,7 @@ class TimeIndependentCorrelation(dataset.DataSet):
     def __init__(self, data, temp_field = "Temp (C)",
             stress_field = "Stress (MPa)", heat_field = "Heat/Lot ID",
             input_temp_units = "degC", input_stress_units = "MPa", 
-            analysis_temp_units = "K",
-            analysis_stress_units = "MPa"):
+            analysis_temp_units = "K", analysis_stress_units = "MPa"):
         super().__init__(data)
 
         self.add_field_units("temperature", temp_field, input_temp_units, 
@@ -40,16 +57,7 @@ class TimeIndependentCorrelation(dataset.DataSet):
 
         self.add_heat_field(heat_field)
 
-    def __call__(self, T):
-        """
-            Alias for self.predict(T)
-
-            Args:
-                T:      temperature data
-        """
-        return self.predict(T)
-
-class PolynomialTimeIndependentCorrelation(TimeIndependentCorrelation):
+class PolynomialTimeIndependentCorrelation(DataDrivenTimeIndependentCorrelation):
     """
         Class used to correlate time independent/temperature dependent
         data as a function of temperature using polynomial regression.
@@ -76,14 +84,24 @@ class PolynomialTimeIndependentCorrelation(TimeIndependentCorrelation):
     def __init__(self, deg, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.deg = deg
+        self.heat_correlations = {}
+        self.heat_correlation_data = {}
 
     def analyze(self):
         """
             Run the stress analysis and store results
         """
-        X = np.vander(self.temperature, self.deg + 1)
-        self.polyavg, self.preds, self.SSE, self.R2, self.SEE = methods.least_squares(
-                X, self.stress)
+        # Overall correlation 
+        self.polyavg, self.preds, self.SSE, self.R2, self.SEE = methods.polynomial_fit(
+                self.temperature, self.stress, self.deg)
+
+        # Heat-specific correlations 
+        for heat in self.unique_heats:
+            polyavg, preds, SSE, R2, SEE = methods.polynomial_fit(
+                    self.temperature[self.heat_indices[heat]],
+                    self.stress[self.heat_indices[heat]], self.deg)
+            self.heat_correlations[heat] = polyavg 
+            self.heat_correlation_data[heat] = (preds, SSE, R2, SEE)
 
         return self
 
@@ -96,7 +114,60 @@ class PolynomialTimeIndependentCorrelation(TimeIndependentCorrelation):
         """
         return np.polyval(self.polyavg, T)
 
-class TabulatedTimeIndependentCorrelation(TimeIndependentCorrelation):
+    def predict_heat(self, heat, T):
+        """
+            Predict heat-specific values as a function of temperature 
+
+            Args:
+                heat:   heat ID
+                T:      temperature
+        """
+        return np.polyval(self.heat_correlations[heat], T)
+
+class UserProvidedTimeIndependentCorrelation(TimeIndependentCorrelation):
+    """
+        Superclass where the user provides the correlation directly
+        for all heats.
+
+        Keyword Args:
+            input_temp_units (str):     temperature units, default is "C"
+            input_stress_units (str):   stress units, default is "MPa"
+            analysis_temp_units (str):  temperature units for analysis, 
+                                        default is "K"
+            analysis_stress_units (str):    analysis stress units, default is 
+                                            "MPa"
+    """
+    def __init__(self, *args, input_temp_units = "degC", input_stress_units = "MPa", 
+                analysis_temp_units = "K", analysis_stress_units = "MPa", **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.corr_temp = input_temp_units
+        self.in_temp = analysis_temp_units
+        self.corr_stress = input_stress_units
+        self.in_stress = analysis_stress_units
+
+        self.unique_heats = []
+
+    def predict(self, T):
+        """
+            Predict some new values as a function of temperature
+
+            Args:
+                T:      temperature data
+        """
+        return units.convert(self.fn(units.convert(T, self.in_temp, self.corr_temp)), self.corr_stress, self.in_stress)
+
+    def predict_heat(self, heat, T):
+        """
+            Predict heat-specific values as a function of temperature 
+
+            Args:
+                heat:   heat ID
+                T:      temperature
+        """
+        return self.predict(T)
+
+class TabulatedTimeIndependentCorrelation(UserProvidedTimeIndependentCorrelation):
     """
         Class used to correlate time independent/temperature dependent
         data as a function of temperature using a user-provided table
@@ -105,22 +176,6 @@ class TabulatedTimeIndependentCorrelation(TimeIndependentCorrelation):
         Args:
             temp_table:                 temperature table values
             stress_table:               stress table values
-            data:                       dataset as a pandas dataframe
-
-        Keyword Args:
-            temp_field (str):           field in array giving temperature, default
-                                        is "Temp (C)"
-            stress_field (str):         field in array giving stress, default is
-                                        "Stress (MPa)"
-            heat_field (str):           field in array giving heat ID, default is
-                                        "Heat/Lot ID"
-            input_temp_units (str):     temperature units, default is "C"
-            input_stress_units (str):   stress units, default is "MPa"
-            analysis_temp_units (str):  temperature units for analysis, 
-                                        default is "K"
-            analysis_stress_units (str):    analysis stress units, default is 
-                                            "MPa"
-
     """
     def __init__(self, temp_table, stress_table, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -136,11 +191,43 @@ class TabulatedTimeIndependentCorrelation(TimeIndependentCorrelation):
 
         return self
 
-    def predict(self, T):
-        """
-            Predict some new values as a function of temperature
+class UserPolynomialTimeIndependentCorrelation(UserProvidedTimeIndependentCorrelation):
+    """
+        User provides a temperature -> value correlation directly
 
-            Args:
-                T:      temperature data
+        Args:
+            poly:       polynomial in numpy order
+    """
+    def __init__(self, poly, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.coefs = poly
+
+    def analyze(self):
         """
-        return self.fn(T)
+            Run the stress analysis and store results
+        """
+        self.fn = Polynomial(self.coefs[::-1])
+
+class ASMEPolynomialTimeIndependentCorrelation(UserProvidedTimeIndependentCorrelation):
+    """
+        ASME type correlation of
+
+        F * S * (p[0] * (T/T0)**0 + p[1] * (T/T0)**1 + ...)
+
+        Args:
+            poly:       polynomial in standard
+    """
+    def __init__(self, F, S0, T0, poly, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self.F = F
+        self.S0 = S0
+        self.T0 = T0
+        self.coefs = poly
+
+    def analyze(self):
+        """
+            Run the stress analysis and store results
+        """
+        self.fn = lambda T: self.F * self.S0 * np.polyval(self.coefs[::-1], T/self.T0)

@@ -65,10 +65,6 @@ class TTPAnalysis(dataset.DataSet):
         
         self.add_heat_field(heat_field)
 
-    @property
-    def nheats(self):
-        return len(self.heat_indices.keys())
-
     def excel_report(self, fname, tabname = "Rupture"):
         """
             Write out an excel workbook 
@@ -284,6 +280,21 @@ class PolynomialAnalysis(TTPAnalysis):
 
         return 10.0**res
 
+    def predict_stress_discontinuous(self, time, temperature, confidence = None):
+        """
+            Predict new values of stress given time and temperature
+            in an accurate but discontinuous way
+
+            Args:
+                time:           input time values
+                temperature:    input temperature values
+
+            Keyword Args:
+                confidence:     confidence interval, if None provide
+                                average predictions
+        """
+        return self.predict_stress(time, temperature, confidence=confidence)
+
 class SplitAnalysis(TTPAnalysis):
     """
         Split the data into two halves based on some stress measure
@@ -382,16 +393,18 @@ class SplitAnalysis(TTPAnalysis):
         
         thresh = self.threshold(temperature)
 
+
         time[stress<thresh] = self.lower_model.predict_time(stress, temperature, 
-                confidence)
+                confidence)[stress<thresh]
         time[stress>=thresh] = self.upper_model.predict_time(stress, temperature, 
-                confidence)
+                confidence)[stress>=thresh]
 
         return time
 
     def predict_stress(self, time, temperature, confidence = None):
         """
             Predict new values of stress given time and temperature
+            in a smooth way
 
             Args:
                 time:           input time values
@@ -405,7 +418,36 @@ class SplitAnalysis(TTPAnalysis):
         upper = self.upper_model.predict_stress(time, temperature, confidence)
         lower = self.lower_model.predict_stress(time, temperature, confidence)
 
-        return np.minimum(upper, lower)
+        return np.minimum(upper,lower)
+
+    def predict_stress_discontinuous(self, time, temperature, confidence = None):
+        """
+            Predict new values of stress given time and temperature
+            in an accurate but discontinuous way
+
+            Args:
+                time:           input time values
+                temperature:    input temperature values
+
+            Keyword Args:
+                confidence:     confidence interval, if None provide
+                                average predictions
+        """
+        # Do the whole thing twice...
+        upper = self.upper_model.predict_stress(time, temperature, confidence)
+        lower = self.lower_model.predict_stress(time, temperature, confidence)
+
+        thresh = self.threshold(temperature)
+
+        res = np.zeros_like(upper)
+        res[upper>=thresh] = upper[upper>=thresh]
+        res[lower<thresh] = lower[lower<thresh]
+
+        neither = np.logical_and(upper<thresh, lower>=thresh)
+
+        res[neither] = 0.5*upper[neither] + 0.5*lower[neither]
+
+        return res
 
 class UncenteredAnalysis(PolynomialAnalysis):
     """
