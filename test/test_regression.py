@@ -82,7 +82,7 @@ class RegressionBilinearRupture(unittest.TestCase, PolynomialComparison):
             237.5])
 
         self.yield_model = time_independent.TabulatedTimeIndependentCorrelation(
-                Trange, ydata, None) 
+                Trange, ydata, None, input_temp_units="K") 
         self.frac = 0.5
 
     def test_upper(self):
@@ -132,7 +132,7 @@ class RegressionBilinearAllowables(unittest.TestCase):
             237.5])
 
         self.yield_model = time_independent.TabulatedTimeIndependentCorrelation(
-                Trange, ydata, None) 
+                Trange, ydata, None, input_temp_units = "K") 
         self.frac = 0.5
 
         rupture_lower_model = ttp.LotCenteredAnalysis(self.TTP, self.order, 
