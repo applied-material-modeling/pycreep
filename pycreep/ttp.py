@@ -239,7 +239,7 @@ class PolynomialAnalysis(TTPAnalysis):
         return 10.0**self.TTP.predict(self.polyavg, self.C_avg + h * self.SEE_heat,
                 stress, temperature)
 
-    def predict_stress(self, time, temperature, confidence = None):
+    def predict_stress(self, time, temperature, confidence = None, root_bounds = None):
         """
             Predict new values of stress given time and temperature
 
@@ -250,7 +250,13 @@ class PolynomialAnalysis(TTPAnalysis):
             Keyword Args:
                 confidence:     confidence interval, if None provide
                                 average predictions
+                root_bounds:    if not None, lower and upper bounds on which root value to use
+                                when inverting the TTP polynomial
         """
+        # Will want these sorted
+        if root_bounds is not None:
+            root_boundary = np.log10(np.sort(root_bounds))
+
         # Take the log of time
         ltime = np.log10(time)
        
@@ -263,20 +269,34 @@ class PolynomialAnalysis(TTPAnalysis):
         TTP = self.TTP.value(self.C_avg + h * self.SEE_heat,
                 time, temperature)
 
-        # Solve each one, one at a time, for now
-        # Vectorizing the cases with an analytic solution should be 
-        # possible
-        res = np.zeros_like(ltime)
-        for i in range(len(ltime)):
+        def solve_one(TTP):
             pi = np.copy(self.polyavg)
-            pi[-1] -= TTP[i]
+            pi[-1] -= TTP
             rs = np.array(np.roots(pi))
             if np.all(np.abs(np.imag(rs)) > 0):
                 raise ValueError("Inverting relation to predict stress failed")
             rs[np.abs(np.imag(rs))>0] = 0
             rs = np.real(rs)
             # Need to consider this...
-            res[i] = np.max(rs)
+            if root_bounds is None:
+                return np.max(rs)
+            else:
+                val = np.logical_and(rs >= root_bounds[0], rs <= root_bounds[1])
+                if np.all(np.logical_not(val)):
+                    raise ValueError("No root falls within user provided bounds!")
+                else:
+                    return rs[val][0]
+
+
+        # Solve each one, one at a time, for now
+        # Vectorizing the cases with an analytic solution should be 
+        # possible
+        if np.isscalar(TTP):
+            res = solve_one(TTP)
+        else:
+            res = np.zeros_like(ltime)
+            for i in range(len(ltime)):
+                res[i] = solve_one(TTP[i])
 
         return 10.0**res
 
