@@ -30,7 +30,7 @@ if __name__ == "__main__":
         237.5])
 
     yield_model = time_independent.TabulatedTimeIndependentCorrelation(
-            Trange, ydata, None) 
+            Trange, ydata, None, input_temp_units = "K") 
     
     # Rupture analysis
     rupture_lower_model = ttp.LotCenteredAnalysis(param, rupture_order, 
