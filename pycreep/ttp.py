@@ -30,6 +30,7 @@ class TTPAnalysis(dataset.DataSet):
             analysis_stress_units (str):    analysis stress units, default is 
                                             "MPa"
             analysis_time_units (str):  analysis time units, default is "hr"
+            time_sign (float):          sign to apply to time units, typically 1.0 but for some analysis -1 makes sense
 
         The setup and analyzed objects are suppose to maintain the following properties:
             * "preds":      predictions for each point
@@ -49,7 +50,8 @@ class TTPAnalysis(dataset.DataSet):
             stress_field = "Stress (MPa)", heat_field = "Heat/Lot ID",
             input_temp_units = "degC", input_stress_units = "MPa", 
             input_time_units = "hrs", analysis_temp_units = "K",
-            analysis_stress_units = "MPa", analysis_time_units = "hrs"):
+            analysis_stress_units = "MPa", analysis_time_units = "hrs",
+                 time_sign = -1.0):
         super().__init__(data)
         
         self.add_field_units("temperature", temp_field, input_temp_units, 
@@ -64,6 +66,7 @@ class TTPAnalysis(dataset.DataSet):
         self.analysis_stress_units = analysis_stress_units
         
         self.add_heat_field(heat_field)
+        self.time_sign = time_sign
 
     def excel_report(self, fname, tabname = "Rupture"):
         """
@@ -507,7 +510,7 @@ class UncenteredAnalysis(PolynomialAnalysis):
             np.vander(np.log10(self.stress), N = self.order + 1
                 ) * self.TTP.stress_transform(self.time, self.temperature)[:,None],
             -np.ones((len(self.stress),1))), axis = 1)
-        y = np.log10(self.time)
+        y = self.time_sign * np.log10(self.time)
 
         b, p, SSE, R2, SEE = methods.least_squares(X, y)
         
@@ -572,7 +575,7 @@ class LotCenteredAnalysis(PolynomialAnalysis):
             np.vander(np.log10(self.stress), N = self.order + 1
                 ) * self.TTP.stress_transform(self.time, self.temperature)[:,None],
             C), axis = 1)
-        y = np.log10(self.time)
+        y = self.time_sign * np.log10(self.time)
         
         b, p, SSE, R2, SEE = methods.least_squares(X, y)
 
