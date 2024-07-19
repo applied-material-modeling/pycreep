@@ -51,7 +51,7 @@ class TTPAnalysis(dataset.DataSet):
             input_temp_units = "degC", input_stress_units = "MPa", 
             input_time_units = "hrs", analysis_temp_units = "K",
             analysis_stress_units = "MPa", analysis_time_units = "hrs",
-                 time_sign = -1.0):
+                 time_sign = 1.0):
         super().__init__(data)
         
         self.add_field_units("temperature", temp_field, input_temp_units, 
@@ -239,8 +239,8 @@ class PolynomialAnalysis(TTPAnalysis):
         else:
             h = scipy.stats.norm.interval(confidence)[1]
 
-        return 10.0**self.TTP.predict(self.polyavg, self.C_avg + h * self.SEE_heat,
-                stress, temperature)
+        return 10.0**(self.time_sign*self.TTP.predict(self.polyavg, self.C_avg + h * self.SEE_heat,
+                stress, temperature))
 
     def predict_stress(self, time, temperature, confidence = None, root_bounds = None):
         """
@@ -261,7 +261,7 @@ class PolynomialAnalysis(TTPAnalysis):
             root_boundary = np.log10(np.sort(root_bounds))
 
         # Take the log of time
-        ltime = np.log10(time)
+        ltime = self.time_sign * np.log10(time)
        
         if confidence is None:
             h = 0.0
@@ -270,7 +270,7 @@ class PolynomialAnalysis(TTPAnalysis):
 
         # Calculate the TTP
         TTP = self.TTP.value(self.C_avg + h * self.SEE_heat,
-                time, temperature)
+                time, temperature, time_sign = self.time_sign)
 
         def solve_one(TTP):
             pi = np.copy(self.polyavg)
@@ -457,18 +457,22 @@ class SplitAnalysis(TTPAnalysis):
                                 average predictions
         """
         # Do the whole thing twice...
+        upper_none = self.upper_model.predict_stress(time, temperature)
+        lower_none = self.lower_model.predict_stress(time, temperature)
         upper = self.upper_model.predict_stress(time, temperature, confidence)
         lower = self.lower_model.predict_stress(time, temperature, confidence)
 
         thresh = self.threshold(temperature)
 
-        res = np.zeros_like(upper)
-        res[upper>=thresh] = upper[upper>=thresh]
-        res[lower<thresh] = lower[lower<thresh]
+        res = np.zeros_like(upper_none)
+        res[upper_none>=thresh] = upper[upper_none>=thresh]
+        res[lower_none<thresh] = lower[lower_none<thresh]
 
-        neither = np.logical_and(upper<thresh, lower>=thresh)
+        neither = np.logical_and(upper_none<thresh, lower_none>=thresh)
 
-        res[neither] = 0.5*upper[neither] + 0.5*lower[neither]
+        wf = (upper_none[neither] - thresh) / (upper_none[neither] - lower_none[neither])
+
+        res[neither] = (1-wf)*upper[neither] + wf*lower[neither]
 
         return res
 
@@ -638,7 +642,7 @@ class LarsonMillerParameter(TTP):
         """
         return np.polyval(poly, np.log10(stress)) / temperature - C
 
-    def value(self, C, time, temperature):
+    def value(self, C, time, temperature, time_sign = 1.0):
         """
             Actually calculate the value of the time-temperature 
             parameter
@@ -648,4 +652,4 @@ class LarsonMillerParameter(TTP):
                 time:           time values
                 temperature:    temperature values
         """
-        return temperature * (np.log10(time) + C)
+        return temperature * (time_sign * np.log10(time) + C)
