@@ -266,7 +266,7 @@ class PolynomialAnalysis(TTPAnalysis):
         if confidence is None:
             h = 0.0
         else:
-            h = scipy.stats.norm.interval(confidence)[1]
+            h = np.sign(confidence) * scipy.stats.norm.interval(np.abs(confidence))[1]
 
         # Calculate the TTP
         TTP = self.TTP.value(self.C_avg + h * self.SEE_heat,
