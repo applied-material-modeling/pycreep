@@ -1,6 +1,9 @@
-from pycreep import units
+"""Calculates ASME-style allowable stresses from underlying correlations
+"""
 
 import numpy as np
+
+from pycreep import units
 
 
 def Sc_SectionII_1A_1B(
@@ -73,5 +76,4 @@ def Sc_SectionII_1A_1B(
             "Sc": Sc,
             "S": S,
         }
-    else:
-        return S
+    return S

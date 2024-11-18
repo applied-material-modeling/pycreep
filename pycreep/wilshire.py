@@ -1,7 +1,10 @@
-from pycreep import ttp, units, methods
+"""Correlate time dependent data using the Wilshire model
+"""
 
 import numpy as np
 import scipy.stats
+
+from pycreep import ttp, units, methods
 
 # Universal gas constant
 R = 8.3145
@@ -39,7 +42,8 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         analysis_time_units (str):  analysis time units, default is "hr"
         predict_norm:               strength object to use for predictions, defaults to norm_data
         ls_ratio_max (float):       max log stress ratio to allow
-        override_Q (None or dict):  if provided, dictionary of heat-specific Q values to use instead of regressing
+        override_Q (None or dict):  if provided, dictionary of heat-specific Q values to use
+                                    instead of regressing
 
     The setup and analyzed objects are suppose to maintain the following properties:
         * "preds":      predictions for each point
@@ -64,8 +68,9 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         ls_ratio_max=0.99,
         override_Q=None,
         min_time=1e-20,
-        **kwargs
+        **kwargs,
     ):
+        # pylint: disable=consider-using-in
         super().__init__(*args, **kwargs)
 
         self.norm_data = norm_data
@@ -74,7 +79,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         elif sign_Q == "+" or sign_Q == 1:
             self.sign_Q = 1.0
         else:
-            raise ValueError("Unknown sign_Q value of %s" % sign_Q)
+            raise ValueError(f"Unknown sign_Q value of {sign_Q}")
 
         self.allow_avg_norm = allow_avg_norm
 
@@ -93,7 +98,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
 
         self.min_time = min_time
 
-    def _write_excel_report(self, tab):
+    def write_excel_report_to_tab(self, tab):
         """
         Write an excel report to a given tab
 
@@ -156,7 +161,7 @@ class WilshireAnalysis(ttp.TTPAnalysis):
             elif (heat not in self.norm_data.unique_heats) and self.allow_avg_norm:
                 y[inds] /= self.norm_data.predict(self.temperature[inds])
             else:
-                raise ValueError("Heat %s not in time independent data" % heat)
+                raise ValueError(f"Heat {heat} not in time independent data")
 
         # In some cases this can happen
         y = np.minimum(self.ls_ratio_max, y)
@@ -221,7 +226,6 @@ class WilshireAnalysis(ttp.TTPAnalysis):
         y_pred_avg = np.log(
             -np.log(self.predict_stress(self.time, self.temperature) / tensile_strength)
         )
-        y_avg = np.log(-np.log(self.stress / tensile_strength))
 
         self.SEE_avg = np.sqrt(np.sum((y - y_pred_avg) ** 2.0) / (len(x) - 3.0))
 

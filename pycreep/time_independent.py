@@ -1,11 +1,15 @@
-from pycreep import dataset, methods, units
+"""Methods for correlating time-independent data, like yield and tensile strength"""
+
+import abc
 
 import numpy as np
 from numpy.polynomial import Polynomial
 import scipy.interpolate as inter
 
+from pycreep import dataset, methods, units
 
-class TimeIndependentCorrelation:
+
+class TimeIndependentCorrelation(abc.ABC):
     """
     Class used to correlate time independent/temperature dependent
     data as a function of temperature.
@@ -13,6 +17,31 @@ class TimeIndependentCorrelation:
 
     def __init__(self, *args, **kwargs):
         pass
+
+    @abc.abstractmethod
+    def predict(self, T):
+        """
+        Predict some new values as a function of temperature
+
+        Args:
+            T:      temperature data
+        """
+        return
+
+    @abc.abstractmethod
+    def predict_heat(self, heat, T):
+        """
+        Predict heat-specific values as a function of temperature
+
+        Args:
+            heat:   heat ID
+            T:      temperature
+        """
+        return
+
+    def analyze(self):
+        """Analyze the data to get ready for predict calls"""
+        return self
 
     def __call__(self, T):
         """
@@ -167,6 +196,8 @@ class UserProvidedTimeIndependentCorrelation(TimeIndependentCorrelation):
         **kwargs
     ):
         super().__init__(*args, **kwargs)
+
+        self.fn = lambda T: None
 
         self.corr_temp = input_temp_units
         self.in_temp = analysis_temp_units

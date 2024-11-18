@@ -1,3 +1,7 @@
+"""
+Mathematical helper functions used in multiple modules
+"""
+
 import numpy as np
 import numpy.linalg as la
 import scipy.optimize as opt
@@ -18,7 +22,7 @@ def least_squares(X, y):
         SEE:    Standard error estimate
     """
     # Actually do the regression
-    b, res, rank, svs = la.lstsq(X, y, rcond=None)
+    b, _, _, _ = la.lstsq(X, y, rcond=None)
 
     # Predictions
     p = X.dot(b)

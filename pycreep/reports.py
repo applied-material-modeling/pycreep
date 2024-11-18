@@ -1,12 +1,12 @@
-from pycreep import allowables
+"""
+    Module to write pretty reports given some analysis results
+"""
 
 import numpy as np
 
 from openpyxl import Workbook
 
-"""
-    Module to write pretty reports given some analysis results
-"""
+from pycreep import allowables
 
 
 def write_complete_report(
