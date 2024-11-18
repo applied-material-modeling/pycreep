@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 import sys
-sys.path.append('..')
+
+sys.path.append("..")
 
 from pycreep import data, ttp
 

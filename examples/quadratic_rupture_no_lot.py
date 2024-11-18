@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 import sys
-sys.path.append('..')
+
+sys.path.append("..")
 
 from pycreep import data, ttp
 
@@ -12,5 +13,5 @@ if __name__ == "__main__":
     order = 2
 
     uncentered = ttp.UncenteredAnalysis(param, order, df).analyze()
-    
+
     uncentered.excel_report("uncentered.xlsx")
