@@ -1,3 +1,6 @@
+"""Basic functions for dealing with units, using the pint library
+"""
+
 import pint
 
 ureg = pint.UnitRegistry()

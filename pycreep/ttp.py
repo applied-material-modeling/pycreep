@@ -1,9 +1,12 @@
-from pycreep import units, methods, dataset
+"""Correlate time dependent data with a time-temperature parameter"""
+
+import abc
 
 import numpy as np
-import numpy.linalg as la
 import scipy.stats
 from openpyxl import Workbook
+
+from pycreep import methods, dataset
 
 
 class TTPAnalysis(dataset.DataSet):
@@ -31,7 +34,8 @@ class TTPAnalysis(dataset.DataSet):
         analysis_stress_units (str):    analysis stress units, default is
                                         "MPa"
         analysis_time_units (str):  analysis time units, default is "hr"
-        time_sign (float):          sign to apply to time units, typically 1.0 but for some analysis -1 makes sense
+        time_sign (float):          sign to apply to time units, typically 1.0
+                                    but for some analysis -1 makes sense
 
     The setup and analyzed objects are suppose to maintain the following properties:
         * "preds":      predictions for each point
@@ -111,7 +115,7 @@ class TTPAnalysis(dataset.DataSet):
         """
         tab = wb.create_sheet(tabname)
 
-        self._write_excel_report(tab)
+        self.write_excel_report_to_tab(tab)
 
 
 class PolynomialAnalysis(TTPAnalysis):
@@ -119,7 +123,7 @@ class PolynomialAnalysis(TTPAnalysis):
     Superclass for polynomial TTP analysis
 
     Args:
-        TTP:                        time-temperature parameter
+        input_ttp:                  time-temperature parameter
         order:                      polynomial order
         data:                       dataset as a pandas dataframe
 
@@ -155,10 +159,10 @@ class PolynomialAnalysis(TTPAnalysis):
         * "R2_heat":    R2 without lot centering, i.e. if you have a random heat
     """
 
-    def __init__(self, TTP, order, *args, **kwargs):
+    def __init__(self, input_ttp, order, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.TTP = TTP
+        self.TTP = input_ttp
         self.order = order
 
     def report(self):
@@ -179,7 +183,7 @@ class PolynomialAnalysis(TTPAnalysis):
             "heat_rms": self.heat_rms,
         }
 
-    def _write_excel_report(self, tab):
+    def write_excel_report_to_tab(self, tab):
         """
         Write an excel report to a given tab
 
@@ -191,7 +195,7 @@ class PolynomialAnalysis(TTPAnalysis):
         tab["B2"] = "Value"
         of = 3
         for i, p in enumerate(self.polyavg[::-1]):
-            tab.cell(row=i + 3, column=1, value="a%i" % i)
+            tab.cell(row=i + 3, column=1, value=f"a{i}")
             tab.cell(row=i + 3, column=2, value=p)
         of = 3 + len(self.polyavg)
         tab.cell(row=of, column=1, value="Overall C:")
@@ -274,7 +278,7 @@ class PolynomialAnalysis(TTPAnalysis):
         """
         # Will want these sorted
         if root_bounds is not None:
-            root_boundary = np.log10(np.sort(root_bounds))
+            root_bounds = np.log10(np.sort(root_bounds))
 
         # Take the log of time
         ltime = self.time_sign * np.log10(time)
@@ -285,13 +289,13 @@ class PolynomialAnalysis(TTPAnalysis):
             h = np.sign(confidence) * scipy.stats.norm.interval(np.abs(confidence))[1]
 
         # Calculate the TTP
-        TTP = self.TTP.value(
+        vals = self.TTP.value(
             self.C_avg + h * self.SEE_heat, time, temperature, time_sign=self.time_sign
         )
 
-        def solve_one(TTP):
+        def solve_one(x):
             pi = np.copy(self.polyavg)
-            pi[-1] -= TTP
+            pi[-1] -= x
             rs = np.array(np.roots(pi))
             if np.all(np.abs(np.imag(rs)) > 0):
                 raise ValueError("Inverting relation to predict stress failed")
@@ -300,22 +304,20 @@ class PolynomialAnalysis(TTPAnalysis):
             # Need to consider this...
             if root_bounds is None:
                 return np.max(rs)
-            else:
-                val = np.logical_and(rs >= root_bounds[0], rs <= root_bounds[1])
-                if np.all(np.logical_not(val)):
-                    raise ValueError("No root falls within user provided bounds!")
-                else:
-                    return rs[val][0]
+            val = np.logical_and(rs >= root_bounds[0], rs <= root_bounds[1])
+            if np.all(np.logical_not(val)):
+                raise ValueError("No root falls within user provided bounds!")
+            return rs[val][0]
 
         # Solve each one, one at a time, for now
         # Vectorizing the cases with an analytic solution should be
         # possible
-        if np.isscalar(TTP):
-            res = solve_one(TTP)
+        if np.isscalar(vals):
+            res = solve_one(vals)
         else:
             res = np.zeros_like(ltime)
             for i in range(len(ltime)):
-                res[i] = solve_one(TTP[i])
+                res[i] = solve_one(vals[i])
 
         return 10.0**res
 
@@ -390,10 +392,10 @@ class SplitAnalysis(TTPAnalysis):
 
         """
         tab = wb.create_sheet(tabname + ", upper stress range")
-        self.upper_model._write_excel_report(tab)
+        self.upper_model.write_excel_report_to_tab(tab)
 
         tab = wb.create_sheet(tabname + ", lower stress range")
-        self.lower_model._write_excel_report(tab)
+        self.lower_model.write_excel_report_to_tab(tab)
 
     def analyze(self):
         """
@@ -527,9 +529,6 @@ class UncenteredAnalysis(PolynomialAnalysis):
         analysis_time_units (str):  analysis time units, default is "hr"
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def analyze(self):
         """
         Actually do the regression analysis and set standard properties
@@ -590,9 +589,6 @@ class LotCenteredAnalysis(PolynomialAnalysis):
         analysis_time_units (str):  analysis time units, default is "hr"
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def analyze(self):
         """
         Actually do the regression analysis and set standard properties
@@ -652,12 +648,47 @@ class LotCenteredAnalysis(PolynomialAnalysis):
         return self
 
 
-class TTP:
+class TTP(abc.ABC):
     """
     Superclass for all time-temperature parameters, currently doesn't do anything
     """
 
-    pass
+    @abc.abstractmethod
+    def stress_transform(self, time, temperature):
+        """
+        Transform the stress
+
+        Parameters:
+            time:           time data
+            temperature:    temperature data
+        """
+        return
+
+    @abc.abstractmethod
+    def predict(self, poly, C, stress, temperature):
+        """
+        Make a prediction in log time for a set of points
+
+        Args:
+            poly:           calibrated polynomial
+            C:              calibrated TTP
+            stress:         stress data
+            temperature:    temperature data
+        """
+        return
+
+    @abc.abstractmethod
+    def value(self, C, time, temperature, time_sign=1.0):
+        """
+        Actually calculate the value of the time-temperature
+        parameter
+
+        Args:
+            C:              calibrated TTP
+            time:           time values
+            temperature:    temperature values
+        """
+        return
 
 
 class LarsonMillerParameter(TTP):

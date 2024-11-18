@@ -1,6 +1,8 @@
-from pycreep import units
+"""Objects managing data sets"""
 
 import numpy as np
+
+from pycreep import units
 
 
 class DataSet:
@@ -14,7 +16,7 @@ class DataSet:
 
     def __init__(self, dataset):
         self.data = dataset
-        self.fields = dict()
+        self.fields = {}
 
     def add_field_units(self, name, dname, dunits, ounits):
         """
@@ -27,10 +29,10 @@ class DataSet:
             dunits:     units in data frame
             ounits:     output units
         """
-        self.fields[
-            name
-        ] = lambda self, dname=dname, dunits=dunits, ounits=ounits: units.convert(
-            np.array(self.data[dname]), dunits, ounits
+        self.fields[name] = (
+            lambda self, dname=dname, dunits=dunits, ounits=ounits: units.convert(
+                np.array(self.data[dname]), dunits, ounits
+            )
         )
 
     def add_heat_field(self, dname):

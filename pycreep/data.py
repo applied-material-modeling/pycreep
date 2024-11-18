@@ -1,3 +1,5 @@
+"""Helper functions for loading data from file"""
+
 import os.path
 
 import pandas as pd
@@ -21,9 +23,8 @@ def load_data_from_file(fname, file_type=None):
         if ext in [".csv"]:
             file_type = "csv"
         else:
-            raise ValueError("Could not infer file type from extension %s!" % ext)
+            raise ValueError(f"Could not infer file type from extension {ext}!")
 
     if file_type == "csv":
         return pd.read_csv(fname)
-    else:
-        raise ValueError("Invalid file type %s!" % ext)
+    raise ValueError(f"Invalid file type {ext}!")
