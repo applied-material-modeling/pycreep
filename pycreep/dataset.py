@@ -29,10 +29,10 @@ class DataSet:
             dunits:     units in data frame
             ounits:     output units
         """
-        self.fields[name] = (
-            lambda self, dname=dname, dunits=dunits, ounits=ounits: units.convert(
-                np.array(self.data[dname]), dunits, ounits
-            )
+        self.fields[
+            name
+        ] = lambda self, dname=dname, dunits=dunits, ounits=ounits: units.convert(
+            np.array(self.data[dname]), dunits, ounits
         )
 
     def add_heat_field(self, dname):
