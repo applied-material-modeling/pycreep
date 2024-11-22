@@ -3,3 +3,5 @@ __pycache__
 *.pyc
 *-report.txt
 *.xlsx
+dist
+pycreep.egg-info

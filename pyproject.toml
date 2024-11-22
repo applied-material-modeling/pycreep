@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=70.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pycreep"
+version = "1.0.1"
+authors = [
+  { name="Mark Messner", email="messner@anl.gov" },
+]
+description = "Python package for correlating and extrapoling time dependent creep data"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+optional-dependencies = {dev = { file = ["dev-requirements.txt"] }}
+
+[project.urls]
+Homepage = "https://github.com/applied-material-modeling/pycreep"
+Issues = "https://github.com/applied-material-modeling/pycreep/issues"
