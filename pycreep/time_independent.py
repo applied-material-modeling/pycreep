@@ -193,7 +193,7 @@ class UserProvidedTimeIndependentCorrelation(TimeIndependentCorrelation):
         input_stress_units="MPa",
         analysis_temp_units="K",
         analysis_stress_units="MPa",
-        **kwargs
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
