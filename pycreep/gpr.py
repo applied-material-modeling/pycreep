@@ -40,7 +40,7 @@ class LMKernel(Kernel):
         self,
         heat_counts,
         lengthscale=torch.tensor(1.0),
-        variance=torch.tensor(1.0),
+        variance=torch.tensor(0.01),
         C_mean=torch.tensor(20.0),
         C_variance=torch.tensor(0.01),
     ):
@@ -52,12 +52,9 @@ class LMKernel(Kernel):
 
         self.nheats = len(heat_counts)
         self.heat_weight = self.heat_counts / torch.sum(self.heat_counts)
-        self.C_mean = PyroParam(
-            torch.full((self.nheats,), C_mean), constraints.positive
-        )
-        self.C_variance = PyroParam(
-            torch.full((self.nheats,), C_variance), constraints.positive
-        )
+        self.C_mean = PyroParam(C_mean, constraints.positive)
+        self.C_variance = PyroParam(C_variance, constraints.positive)
+        self.delta_C = PyroParam(torch.full((self.nheats,), 0.0))
 
     def _d2(self, X, Z):
         """
@@ -72,13 +69,11 @@ class LMKernel(Kernel):
         r2 = X2 - 2 * XZ + Z2.t()
         return r2.clamp(min=0)
 
-    def all_heat_statistics(self):
+    def heat_variation(self):
         """
-        Calculate the mean and variance of the all-heat average
+        Add zero to the start of the lot constants to include the all-heat average
         """
-        return torch.sum(self.C_mean * self.heat_weight), torch.sum(
-            self.C_variance * self.heat_weight**2.0
-        )
+        return torch.cat([torch.zeros((1,)), self.delta_C])
 
     def calculate_mean_var(self, X):
         """
@@ -88,13 +83,10 @@ class LMKernel(Kernel):
             X (torch.tensor): input data, shape (N,3)
         """
         heat_id = X[:, 2].long()
-        C_mean = self.C_mean[heat_id]
-        C_variance = self.C_variance[heat_id]
-
-        C_mean[heat_id == -1], C_variance[heat_id == -1] = self.all_heat_statistics()
+        C_mean = self.C_mean + self.heat_variation()[heat_id + 1]
 
         mean_X = X[:, 0] * (C_mean + torch.log10(X[:, 1]))
-        var_X = X[:, 0] ** 2.0 * C_variance
+        var_X = X[:, 0] ** 2.0 * self.C_variance
 
         return mean_X, var_X
 
@@ -233,6 +225,8 @@ class GPRLMPModel(ttp.TTPAnalysis):
             if verbose:
                 iter.set_description("loss=%e" % loss)
 
+        self.C_avg = self.gp.kernel.C_mean.item()
+
         return self
 
     def predict_log_stress(self, time, temperature):
@@ -280,4 +274,4 @@ class GPRLMPModel(ttp.TTPAnalysis):
 
         z = ss.norm.interval(np.abs(confidence))[1]
 
-        return 10.0 ** (log_mean + np.sign(confidence) * z * np.sqrt(log_var))
+        return 10.0 ** (log_mean - np.sign(confidence) * z * np.sqrt(log_var))
