@@ -7,12 +7,11 @@ import scipy.stats as ss
 
 import torch
 import pyro
-import pyro.contrib.gp as gp
 from torch.distributions import constraints
-
 from pyro.contrib import gp
 from pyro.contrib.gp.kernels.kernel import Kernel
-from pyro.nn.module import PyroParam
+from pyro.nn.module import PyroParam, PyroSample
+import pyro.distributions as dist
 
 from pycreep import ttp
 
@@ -21,9 +20,6 @@ from tqdm import trange
 
 class LMKernel(Kernel):
     """Kernel used for Gaussian process LM regression
-
-    Args:
-        heat_counts (list): number of samples in each heat
 
     Keyword Args:
         lengthscale (torch.tensor): kernel length scale
@@ -38,23 +34,17 @@ class LMKernel(Kernel):
 
     def __init__(
         self,
-        heat_counts,
         lengthscale=torch.tensor(1.0),
         variance=torch.tensor(0.01),
         C_mean=torch.tensor(20.0),
-        C_variance=torch.tensor(0.01),
+        C_variance=torch.tensor(1.0),
     ):
         super().__init__(3, None)
 
-        self.heat_counts = torch.tensor(heat_counts)
         self.lengthscale = PyroParam(lengthscale, constraints.positive)
         self.variance = PyroParam(variance, constraints.positive)
-
-        self.nheats = len(heat_counts)
-        self.heat_weight = self.heat_counts / torch.sum(self.heat_counts)
         self.C_mean = PyroParam(C_mean, constraints.positive)
         self.C_variance = PyroParam(C_variance, constraints.positive)
-        self.delta_C = PyroParam(torch.full((self.nheats,), 0.0))
 
     def _d2(self, X, Z):
         """
@@ -69,27 +59,6 @@ class LMKernel(Kernel):
         r2 = X2 - 2 * XZ + Z2.t()
         return r2.clamp(min=0)
 
-    def heat_variation(self):
-        """
-        Add zero to the start of the lot constants to include the all-heat average
-        """
-        return torch.cat([torch.zeros((1,)), self.delta_C])
-
-    def calculate_mean_var(self, X):
-        """
-        Calculate the mean and variance of the lot constant
-
-        Args:
-            X (torch.tensor): input data, shape (N,3)
-        """
-        heat_id = X[:, 2].long()
-        C_mean = self.C_mean + self.heat_variation()[heat_id + 1]
-
-        mean_X = X[:, 0] * (C_mean + torch.log10(X[:, 1]))
-        var_X = X[:, 0] ** 2.0 * self.C_variance
-
-        return mean_X, var_X
-
     def forward(self, X, Z=None, diag=False):
         """
         Forward method for the kernel
@@ -97,8 +66,8 @@ class LMKernel(Kernel):
         if Z is None:
             Z = X
 
-        mean_X, var_X = self.calculate_mean_var(X)
-        mean_Z, var_Z = self.calculate_mean_var(Z)
+        mean_X, var_X = self.calculate_sample_statistics(X)
+        mean_Z, var_Z = self.calculate_sample_statistics(Z)
 
         scov = torch.outer(var_X, var_Z)
 
@@ -112,6 +81,84 @@ class LMKernel(Kernel):
         if diag:
             return mat.diag()
         return mat
+
+
+class UncenteredLMKernel(LMKernel):
+    """
+    Kernel used for Gaussian process LM regression, no lot centering
+
+    Keyword Args:
+        lengthscale (torch.tensor): kernel length scale
+        variance (torch.tensor): kernel variance
+        C_mean (torch.tensor): initial guess at the mean of the Larson-Miller parameter
+        C_variance (torch.tensor): initial guess at the variance of the Larson-Miller parameter
+
+    Input order for parameters in X is [temperature, time, heat_index]
+
+    -1 indicates we want to use the all heat average, rather than heat-specific information
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def calculate_sample_statistics(self, X):
+        """
+        Calculate the lot statistics for each sample
+
+        Args:
+            X (torch.tensor): input data, shape (N,3)
+        """
+        mean_X = X[:, 0] * (self.C_mean + torch.log10(X[:, 1]))
+        var_X = X[:, 0] ** 2.0 * self.C_variance
+
+        return mean_X, var_X
+
+
+class LotCenteredLMKernel(LMKernel):
+    """
+    Kernel used for Gaussian process LM regression with lot centering via a hierarchical model
+
+    Args:
+        nheat (int): number of heats
+
+    Keyword Args:
+        lengthscale (torch.tensor): kernel length scale
+        variance (torch.tensor): kernel variance
+        C_mean (torch.tensor): initial guess at the mean of the Larson-Miller parameter
+        C_variance (torch.tensor): initial guess at the variance of the Larson-Miller parameter
+
+    Input order for parameters in X is [temperature, time, heat_index]
+
+    -1 indicates we want to use the all heat average, rather than heat-specific information
+    """
+
+    def __init__(self, nheat, *args, subvariance=torch.tensor(0.1), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.nheat = nheat
+        self.subvariance = subvariance
+
+        self.lot_C_mean = PyroSample(
+            dist.Normal(self.C_mean, self.C_variance).expand([nheat]).to_event(1)
+        )
+        self.lot_C_variance = PyroSample(
+            dist.HalfNormal(self.subvariance).expand([nheat]).to_event(1)
+        )
+
+    def calculate_sample_statistics(self, X):
+        """
+        Calculate the lot statistics for each sample
+
+        Args:
+            X (torch.tensor): input data, shape (N,3)
+        """
+        inds = X[:, 2].long()
+        mean = torch.where(inds == -1, self.C_mean, self.lot_C_mean[inds])
+        var = torch.where(inds == -1, self.C_variance, self.lot_C_variance[inds])
+
+        mean_X = X[:, 0] * (mean + torch.log10(X[:, 1]))
+        var_X = X[:, 0] ** 2.0 * var
+
+        return mean_X, var_X
 
 
 class GPRLMPModel(ttp.TTPAnalysis):
@@ -152,7 +199,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
         *args,
         uncentered=False,
         noise=0.01,
-        niter=5,
+        niter=500,
         temperature_scale=1000.0,
         **kwargs,
     ):
@@ -199,17 +246,21 @@ class GPRLMPModel(ttp.TTPAnalysis):
 
         # Setup optimizer
         pyro.clear_param_store()
-        self.kernel = LMKernel(self.heat_counts)
+        self.kernel = (
+            UncenteredLMKernel()
+            if self.uncentered
+            else LotCenteredLMKernel(len(self.heat_indices))
+        )
 
         self.gp = gp.models.GPRegression(X, y, self.kernel, torch.tensor(self.noise))
-        optimizer = torch.optim.LBFGS(self.gp.parameters())
+        optimizer = torch.optim.Adam(self.gp.parameters(), lr=1.0e-2)
         loss_fn = pyro.infer.Trace_ELBO().differentiable_loss
 
         # Closure for optimizer
         def closure():
             optimizer.zero_grad()
             loss = loss_fn(self.gp.model, self.gp.guide)
-            loss.backward()
+            loss.backward(retain_graph=True)
             return loss
 
         # Optimize
