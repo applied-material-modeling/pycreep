@@ -26,23 +26,18 @@ class UncenteredLMP(PyroModule):
     Larson-Miller transformation of the mean and variance of the time and temperature
 
     Keyword Args:
-        C_mean (float):     mean of the Larson-Miller parameter, default is 20.0
-        C_variance (float): variance of the Larson-Miller parameter, default is 0.01
+        C:          Larson-Miller parameter
     """
 
-    def __init__(self, C_mean=20.0, C_variance=0.01):
+    def __init__(self, C=20.0):
         super().__init__()
-        self.C_mean = PyroSample(dist.Normal(C_mean, 1.0))
-        self.C_variance = PyroSample(dist.HalfNormal(C_variance))
+        self.C = PyroSample(dist.Normal(C, C / 10.0))
 
     def forward(self, X):
         """
-        Given the model input provide the mean and variance of the Larson-Miller parameter
+        Transform the model input into the LMP
         """
-        return (
-            X[:, 0] * (self.C_mean + torch.log10(X[:, 1])),
-            X[:, 0] ** 2.0 * self.C_variance,
-        )
+        return X[:, 0] * (self.C + torch.log10(X[:, 1]))
 
 
 class Kernel(PyroModule):
@@ -54,44 +49,21 @@ class Kernel(PyroModule):
         length (float): length scale of the kernel, default is 2.0
     """
 
-    def __init__(self, var=0.01, length=1.0):
+    def __init__(self, var=0.1, length=5.0):
         super().__init__()
-        self.var = PyroSample(dist.HalfNormal(var))
-        self.length = PyroSample(dist.Normal(length, 0.1))
+        self.var = PyroSample(dist.LogNormal(log(var), var / 10.0))
+        self.length = PyroSample(dist.LogNormal(log(length), length / 10.0))
 
-    def distance(self, X, Z):
-        """
-        Calculate the squared distance between two sets of points
-
-        Args:
-            X (torch.tensor): first set of points
-            Z (torch.tensor): second set of points
-        """
-        X = X.unsqueeze(1)
-        Z = Z.unsqueeze(1)
-        X2 = (X**2.0).sum(1, keepdim=True)
-        Z2 = (Z**2.0).sum(1, keepdim=True)
-        XZ = X.matmul(Z.t())
-        r2 = X2 - 2 * XZ + Z2.t()
-        return r2.clamp(min=0)
-
-    def forward(self, X_mean, X_variance, Y_mean, Y_variance):
+    def forward(self, X1, X2):
         """
         Evaluate the kernel
 
         Args:
-            X_mean (torch.tensor): mean of the first set of points
-            X_variance (torch.tensor): variance of the first set of points
-            Y_mean (torch.tensor): mean of the second set of points
-            Y_variance (torch.tensor): variance of the second set of points
+            X1 (torch.tensor): first set of points
+            X2 (torch.tensor): second set of points
         """
-        scov = X_variance[:, None] + Y_variance
-        scaled_r2 = torch.exp(
-            -0.5 * self.distance(X_mean, Y_mean) / (scov + self.length)
-        )
-        sf = self.var / torch.sqrt(torch.abs(1.0 + scov / self.length))
-
-        return sf * scaled_r2
+        d = X1[:, None] - X2
+        return self.var * torch.exp(-0.5 * (d / self.length) ** 2.0)
 
 
 class GPModel(PyroModule):
@@ -107,11 +79,11 @@ class GPModel(PyroModule):
         jitter (float): jitter for numerical stability, default is 1.0e-6
     """
 
-    def __init__(self, kernel, ttp_model, noise=0.01, jitter=1.0e-6):
+    def __init__(self, kernel, ttp_model, noise=0.001, jitter=1.0e-6):
         super().__init__()
         self.kernel = kernel
         self.ttp_model = ttp_model
-        self.noise = PyroSample(dist.HalfNormal(noise))
+        self.noise = PyroSample(dist.LogNormal(log(noise), noise / 10.0))
         self.jitter = jitter
 
     def covariance(self, X1, X2, noise=True):
@@ -125,9 +97,9 @@ class GPModel(PyroModule):
         Keyword Args:
             noise (bool): include noise in the covariance, default is True
         """
-        C1_mean, C1_variance = self.ttp_model(X1)
-        C2_mean, C2_variance = self.ttp_model(X2)
-        k = self.kernel(C1_mean, C1_variance, C2_mean, C2_variance)
+        TTP1 = self.ttp_model(X1)
+        TTP2 = self.ttp_model(X2)
+        k = self.kernel(TTP1, TTP2)
         if noise:
             return k + (self.noise + self.jitter) * torch.eye(X1.shape[0])
         return k
@@ -155,12 +127,11 @@ class GPModel(PyroModule):
 
         Lff = torch.linalg.cholesky(k)
 
-        with pyro.plate(y.shape[0]):
-            return pyro.sample(
-                "obs",
-                dist.MultivariateNormal(torch.zeros(X1.shape[0]), scale_tril=Lff),
-                obs=y,
-            )
+        return pyro.sample(
+            "obs",
+            dist.MultivariateNormal(torch.zeros(X1.shape[0]), scale_tril=Lff),
+            obs=y,
+        )
 
 
 class GPRLMPModel(ttp.TTPAnalysis):
@@ -263,7 +234,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
             if verbose:
                 iter.set_description("loss=%e" % loss)
 
-        self.C_avg = pyro.param("AutoDelta.ttp_model.C_mean").item()
+        self.C_avg = pyro.param("AutoDelta.ttp_model.C").item()
 
         return self
 
