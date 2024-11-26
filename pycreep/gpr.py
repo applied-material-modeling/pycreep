@@ -5,133 +5,92 @@ import numpy as np
 
 import scipy.stats as ss
 
-from math import log
-
 import torch
 import pyro
-import pyro.distributions as dist
-from pyro.infer.autoguide import AutoDelta
-import pyro.optim as optim
-from pyro.infer import SVI, Trace_ELBO, Predictive
+import pyro.contrib.gp as gp
+from torch.distributions import constraints
 
-from pyro.nn import PyroModule, PyroSample
+from pyro.contrib import gp
+from pyro.contrib.gp.kernels.kernel import Kernel
+from pyro.nn.module import PyroParam
 
 from pycreep import ttp
 
 from tqdm import trange
 
 
-class UncenteredLMP(PyroModule):
-    """
-    Larson-Miller transformation of the mean and variance of the time and temperature
+class LMKernel(Kernel):
+    """Kernel used for Gaussian process LM regression
+
+    For the moment this is not lot-centered
 
     Keyword Args:
-        C:          Larson-Miller parameter
+        lengthscale (torch.tensor): kernel length scale
+        variance (torch.tensor): kernel variance
+        C_mean (torch.tensor): initial guess at the mean of the Larson-Miller parameter
+        C_variance (torch.tensor): initial guess at the variance of the Larson-Miller parameter
+
+    Input order for parameters in X is [temperature, time]
     """
 
-    def __init__(self, C=20.0):
-        super().__init__()
-        self.C = PyroSample(dist.Normal(C, C / 10.0))
+    def __init__(
+        self,
+        lengthscale=torch.tensor(1.0),
+        variance=torch.tensor(1.0),
+        C_mean=torch.tensor(20.0),
+        C_variance=torch.tensor(0.1),
+    ):
+        super().__init__(3, None)
 
-    def forward(self, X):
+        self.lengthscale = PyroParam(lengthscale, constraints.positive)
+        self.variance = PyroParam(variance, constraints.positive)
+        self.C_mean = PyroParam(C_mean, constraints.positive)
+        self.C_variance = PyroParam(C_variance, constraints.positive)
+
+    def _d2(self, X, Z):
         """
-        Transform the model input into the LMP
-        """
-        return X[:, 0] * (self.C + torch.log10(X[:, 1]))
-
-
-class Kernel(PyroModule):
-    """
-    Recreate the squared exponential kernel for better control of the calibration
-
-    Keyword Args:
-        var (float):    variance of the kernel, default is 1.0
-        length (float): length scale of the kernel, default is 2.0
-    """
-
-    def __init__(self, var=0.1, length=5.0):
-        super().__init__()
-        self.var = PyroSample(dist.LogNormal(log(var), var / 10.0))
-        self.length = PyroSample(dist.LogNormal(log(length), length / 10.0))
-
-    def forward(self, X1, X2):
-        """
-        Evaluate the kernel
+        Squared distance calculator
 
         Args:
-            X1 (torch.tensor): first set of points
-            X2 (torch.tensor): second set of points
+            X (torch.tensor): first set of points
+            Y (torch.tensor): second set of points
         """
-        d = X1[:, None] - X2
-        return self.var * torch.exp(-0.5 * (d / self.length) ** 2.0)
+        return (X[:, None] - Z) ** 2.0
 
-
-class GPModel(PyroModule):
-    """
-    Gaussian  process model
-
-    Args:
-        kernel (gpr.Kernel): kernel for the GP
-        ttp_model (gpr.UncenteredLMP): Larson-Miller model
-
-    Keyword Args:
-        noise (float):  noise level for the model, default is 0.01
-        jitter (float): jitter for numerical stability, default is 1.0e-6
-    """
-
-    def __init__(self, kernel, ttp_model, noise=0.001, jitter=1.0e-6):
-        super().__init__()
-        self.kernel = kernel
-        self.ttp_model = ttp_model
-        self.noise = PyroSample(dist.LogNormal(log(noise), noise / 10.0))
-        self.jitter = jitter
-
-    def covariance(self, X1, X2, noise=True):
+    def calculate_mean_var(self, X):
         """
-        Calculate the covariance matrix
+        Calculate the mean and variance of the lot constant
 
         Args:
-            X1 (torch.tensor): first set of points
-            X2 (torch.tensor): second set of points
-
-        Keyword Args:
-            noise (bool): include noise in the covariance, default is True
+            X (torch.tensor): input data, shape (N,3)
         """
-        TTP1 = self.ttp_model(X1)
-        TTP2 = self.ttp_model(X2)
-        k = self.kernel(TTP1, TTP2)
-        if noise:
-            return k + (self.noise + self.jitter) * torch.eye(X1.shape[0])
-        return k
+        mean_X = X[:, 0] * (self.C_mean + torch.log10(X[:, 1]))
+        var_X = X[:, 0] ** 2.0 * self.C_variance
 
-    def forward(self, X1, y, X2=None, noise=True):
+        return mean_X, var_X
+
+    def forward(self, X, Z=None, diag=False):
         """
-        Evaluate the model
-
-        Args:
-            X1 (torch.tensor): first set of points
-            y (torch.tensor): observed values
-
-        Keyword Args:
-            X2 (torch.tensor): second set of points, default is None
-            noise (bool): include noise in the covariance, default is True
+        Forward method for the kernel
         """
-        if X2 is None:
-            X2 = X1
+        if Z is None:
+            Z = X
 
-        k = pyro.deterministic(
-            "cross_correlation", self.covariance(X1, X2, noise=noise)
+        mean_X, var_X = self.calculate_mean_var(X)
+        mean_Z, var_Z = self.calculate_mean_var(Z)
+
+        scov = var_X[:, None] + var_Z
+
+        scaled_r2 = torch.exp(
+            -0.5 * self._d2(mean_X, mean_Z) / (scov + self.lengthscale)
         )
-        if X2 is not None:
-            return k
+        sf = self.variance / torch.sqrt(torch.abs(1.0 + scov / self.lengthscale))
 
-        Lff = torch.linalg.cholesky(k)
+        mat = sf * scaled_r2
 
-        return pyro.sample(
-            "obs",
-            dist.MultivariateNormal(torch.zeros(X1.shape[0]), scale_tril=Lff),
-            obs=y,
-        )
+        if diag:
+            return mat.diag()
+        return mat
 
 
 class GPRLMPModel(ttp.TTPAnalysis):
@@ -142,9 +101,9 @@ class GPRLMPModel(ttp.TTPAnalysis):
         data:                       dataset as a pandas dataframe
 
     Keyword Args:
-        uncentered (bool):          do not lot center, default is False
         noise (float):              noise level for the GP, default is 0.01
-        niter (int):                number of iterations for training the GP, default is 5
+        niter (int):                number of iterations for training the GP, default is 200
+        lr (float):                 learning rate, default is 1.0e-2
         temperature_scale (float):  scale factor for temperature, default is 1000.0
         time_field (str):           field in array giving time, default is
                                     "Life (h)"
@@ -170,8 +129,8 @@ class GPRLMPModel(ttp.TTPAnalysis):
     def __init__(
         self,
         *args,
-        noise=0.001,
-        niter=500,
+        noise=0.01,
+        niter=200,
         lr=1.0e-2,
         temperature_scale=1000.0,
         **kwargs,
@@ -183,13 +142,6 @@ class GPRLMPModel(ttp.TTPAnalysis):
         self.lr = lr
         self.temperature_scale = temperature_scale
 
-        self.heat_counts = [len(h) for h in self.heat_indices.values()]
-        self.heat_id = {h: i for i, h in enumerate(self.heat_indices.keys())}
-        self.flat_indices = np.zeros(len(self.temperature), dtype=int)
-
-        for i, h in enumerate(self.heat_indices.keys()):
-            self.flat_indices[self.heat_indices[h]] = i
-
     def analyze(self, verbose=False):
         """
         Train the GP model
@@ -198,28 +150,31 @@ class GPRLMPModel(ttp.TTPAnalysis):
             verbose (bool):     print out the training progress
         """
         # Set up the input data in order
-        self.X = torch.tensor(
+        X = torch.tensor(
             np.stack(
                 [
                     self.temperature / self.temperature_scale,
                     self.time,
-                    self.flat_indices,
                 ],
                 axis=1,
             )
         )
-        self.y = torch.log10(torch.tensor(self.stress))
+        y = torch.log10(torch.tensor(self.stress))
 
         # Setup optimizer
         pyro.clear_param_store()
+        self.kernel = LMKernel()
 
-        kernel = Kernel()
-        ttp_model = UncenteredLMP()
-        self.model = GPModel(kernel, ttp_model, noise=self.noise)
+        self.gp = gp.models.GPRegression(X, y, self.kernel, torch.tensor(self.noise))
+        optimizer = torch.optim.Adam(self.gp.parameters(), lr=self.lr)
+        loss_fn = pyro.infer.Trace_ELBO().differentiable_loss
 
-        optimizer = optim.Adam({"lr": self.lr})
-        self.guide = AutoDelta(self.model)
-        svi = SVI(self.model, self.guide, optimizer, loss=Trace_ELBO())
+        # Closure for optimizer
+        def closure():
+            optimizer.zero_grad()
+            loss = loss_fn(self.gp.model, self.gp.guide)
+            loss.backward()
+            return loss
 
         # Optimize
         if verbose:
@@ -229,12 +184,12 @@ class GPRLMPModel(ttp.TTPAnalysis):
             iter = range(self.niter)
 
         for _ in iter:
-            loss = svi.step(self.X, self.y)
+            loss = optimizer.step(closure)
 
             if verbose:
                 iter.set_description("loss=%e" % loss)
 
-        self.C_avg = pyro.param("AutoDelta.ttp_model.C").item()
+        self.C_avg = self.kernel.C_mean.item()
 
         return self
 
@@ -249,37 +204,20 @@ class GPRLMPModel(ttp.TTPAnalysis):
         if np.isscalar(temperature):
             temperature = np.full_like(time, temperature)
 
-        Xp = torch.tensor(
+        X = torch.tensor(
             np.stack(
                 [
                     temperature / self.temperature_scale,
                     time,
-                    np.full_like(time, -1),
                 ],
                 axis=1,
             )
         )
 
-        predict = Predictive(
-            self.model,
-            guide=self.guide,
-            num_samples=1,
-        )
-        k11 = predict(self.X, self.y, X2=self.X)["cross_correlation"][0]
-        k21 = predict(Xp, self.y, X2=self.X, noise=False)["cross_correlation"][0]
-        k22 = predict(Xp, self.y, X2=Xp)["cross_correlation"][0]
+        with torch.no_grad():
+            mean, var = self.gp(X, full_cov=False, noiseless=False)
 
-        (
-            LU,
-            pivots,
-        ) = torch.linalg.lu_factor(k11)
-
-        mean = k21.matmul(
-            torch.linalg.lu_solve(LU, pivots, self.y.unsqueeze(-1))
-        ).squeeze(-1)
-        variance = k22 - k21.matmul(torch.linalg.lu_solve(LU, pivots, k21.t()))
-
-        return mean.numpy(), np.diag(variance.numpy())
+        return mean.numpy(), var.numpy()
 
     def predict_stress(self, time, temperature, confidence=None):
         """
