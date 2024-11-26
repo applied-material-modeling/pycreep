@@ -54,7 +54,7 @@ class Kernel(PyroModule):
         length (float): length scale of the kernel, default is 2.0
     """
 
-    def __init__(self, var=1.0, length=2.0):
+    def __init__(self, var=0.01, length=1.0):
         super().__init__()
         self.var = PyroSample(dist.HalfNormal(var))
         self.length = PyroSample(dist.Normal(length, 0.1))
@@ -85,7 +85,7 @@ class Kernel(PyroModule):
             Y_mean (torch.tensor): mean of the second set of points
             Y_variance (torch.tensor): variance of the second set of points
         """
-        scov = torch.outer(X_variance, Y_variance)
+        scov = X_variance[:, None] + Y_variance
         scaled_r2 = torch.exp(
             -0.5 * self.distance(X_mean, Y_mean) / (scov + self.length)
         )
@@ -201,6 +201,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
         *args,
         noise=0.001,
         niter=500,
+        lr=1.0e-2,
         temperature_scale=1000.0,
         **kwargs,
     ):
@@ -208,6 +209,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
 
         self.noise = noise
         self.niter = niter
+        self.lr = lr
         self.temperature_scale = temperature_scale
 
         self.heat_counts = [len(h) for h in self.heat_indices.values()]
@@ -244,7 +246,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
         ttp_model = UncenteredLMP()
         self.model = GPModel(kernel, ttp_model, noise=self.noise)
 
-        optimizer = optim.Adam({"lr": 0.01})
+        optimizer = optim.Adam({"lr": self.lr})
         self.guide = AutoDelta(self.model)
         svi = SVI(self.model, self.guide, optimizer, loss=Trace_ELBO())
 
