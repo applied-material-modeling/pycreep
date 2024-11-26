@@ -12,7 +12,7 @@ import pyro
 import pyro.distributions as dist
 from pyro.infer.autoguide import AutoDelta
 import pyro.optim as optim
-from pyro.infer import SVI, Trace_ELBO
+from pyro.infer import SVI, Trace_ELBO, Predictive
 
 from pyro.nn import PyroModule, PyroSample
 
@@ -22,12 +22,23 @@ from tqdm import trange
 
 
 class UncenteredLMP(PyroModule):
-    def __init__(self, C_mean=20.0, C_variance=0.1):
+    """
+    Larson-Miller transformation of the mean and variance of the time and temperature
+
+    Keyword Args:
+        C_mean (float):     mean of the Larson-Miller parameter, default is 20.0
+        C_variance (float): variance of the Larson-Miller parameter, default is 0.01
+    """
+
+    def __init__(self, C_mean=20.0, C_variance=0.01):
         super().__init__()
-        self.C_mean = PyroSample(dist.LogNormal(log(C_mean), 1.0))
-        self.C_variance = PyroSample(dist.LogNormal(log(C_variance), 1.0))
+        self.C_mean = PyroSample(dist.Normal(C_mean, 1.0))
+        self.C_variance = PyroSample(dist.HalfNormal(C_variance))
 
     def forward(self, X):
+        """
+        Given the model input provide the mean and variance of the Larson-Miller parameter
+        """
         return (
             X[:, 0] * (self.C_mean + torch.log10(X[:, 1])),
             X[:, 0] ** 2.0 * self.C_variance,
@@ -35,12 +46,27 @@ class UncenteredLMP(PyroModule):
 
 
 class Kernel(PyroModule):
-    def __init__(self, var=0.01, length=1.0):
+    """
+    Recreate the squared exponential kernel for better control of the calibration
+
+    Keyword Args:
+        var (float):    variance of the kernel, default is 1.0
+        length (float): length scale of the kernel, default is 2.0
+    """
+
+    def __init__(self, var=1.0, length=2.0):
         super().__init__()
-        self.var = PyroSample(dist.LogNormal(log(var), 1.0))
-        self.length = PyroSample(dist.LogNormal(log(length), 1.0))
+        self.var = PyroSample(dist.HalfNormal(var))
+        self.length = PyroSample(dist.Normal(length, 0.1))
 
     def distance(self, X, Z):
+        """
+        Calculate the squared distance between two sets of points
+
+        Args:
+            X (torch.tensor): first set of points
+            Z (torch.tensor): second set of points
+        """
         X = X.unsqueeze(1)
         Z = Z.unsqueeze(1)
         X2 = (X**2.0).sum(1, keepdim=True)
@@ -49,47 +75,92 @@ class Kernel(PyroModule):
         r2 = X2 - 2 * XZ + Z2.t()
         return r2.clamp(min=0)
 
-    def forward(self, X, Y, scov):
-        scaled_r2 = torch.exp(-0.5 * self.distance(X, Y) / (scov + self.length))
+    def forward(self, X_mean, X_variance, Y_mean, Y_variance):
+        """
+        Evaluate the kernel
+
+        Args:
+            X_mean (torch.tensor): mean of the first set of points
+            X_variance (torch.tensor): variance of the first set of points
+            Y_mean (torch.tensor): mean of the second set of points
+            Y_variance (torch.tensor): variance of the second set of points
+        """
+        scov = torch.outer(X_variance, Y_variance)
+        scaled_r2 = torch.exp(
+            -0.5 * self.distance(X_mean, Y_mean) / (scov + self.length)
+        )
         sf = self.var / torch.sqrt(torch.abs(1.0 + scov / self.length))
 
         return sf * scaled_r2
 
 
 class GPModel(PyroModule):
-    def __init__(self, kernel, ttp_model, noise=0.001, jitter=1.0e-6):
+    """
+    Gaussian  process model
+
+    Args:
+        kernel (gpr.Kernel): kernel for the GP
+        ttp_model (gpr.UncenteredLMP): Larson-Miller model
+
+    Keyword Args:
+        noise (float):  noise level for the model, default is 0.01
+        jitter (float): jitter for numerical stability, default is 1.0e-6
+    """
+
+    def __init__(self, kernel, ttp_model, noise=0.01, jitter=1.0e-6):
         super().__init__()
         self.kernel = kernel
         self.ttp_model = ttp_model
-        self.noise = PyroSample(dist.LogNormal(log(noise), 1.0))
+        self.noise = PyroSample(dist.HalfNormal(noise))
         self.jitter = jitter
 
-    def crossvariance(self, X1, X2, noise=True):
+    def covariance(self, X1, X2, noise=True):
+        """
+        Calculate the covariance matrix
+
+        Args:
+            X1 (torch.tensor): first set of points
+            X2 (torch.tensor): second set of points
+
+        Keyword Args:
+            noise (bool): include noise in the covariance, default is True
+        """
         C1_mean, C1_variance = self.ttp_model(X1)
         C2_mean, C2_variance = self.ttp_model(X2)
-        scov = torch.outer(C1_variance, C2_variance)
-        k = self.kernel(C1_mean, C2_mean, scov)
+        k = self.kernel(C1_mean, C1_variance, C2_mean, C2_variance)
         if noise:
             return k + (self.noise + self.jitter) * torch.eye(X1.shape[0])
         return k
 
-    def forward(self, X1, y, X2=None):
+    def forward(self, X1, y, X2=None, noise=True):
+        """
+        Evaluate the model
+
+        Args:
+            X1 (torch.tensor): first set of points
+            y (torch.tensor): observed values
+
+        Keyword Args:
+            X2 (torch.tensor): second set of points, default is None
+            noise (bool): include noise in the covariance, default is True
+        """
         if X2 is None:
             X2 = X1
 
-        k = self.crossvariance(X1, X2)
+        k = pyro.deterministic(
+            "cross_correlation", self.covariance(X1, X2, noise=noise)
+        )
+        if X2 is not None:
+            return k
 
         Lff = torch.linalg.cholesky(k)
 
-        pyro.sample(
-            "y",
-            dist.MultivariateNormal(torch.zeros(X1.shape[0]), scale_tril=Lff)
-            .expand_by(y.shape[:-1])
-            .to_event(y.dim() - 1),
-            obs=y,
-        )
-
-        return k
+        with pyro.plate(y.shape[0]):
+            return pyro.sample(
+                "obs",
+                dist.MultivariateNormal(torch.zeros(X1.shape[0]), scale_tril=Lff),
+                obs=y,
+            )
 
 
 class GPRLMPModel(ttp.TTPAnalysis):
@@ -128,7 +199,6 @@ class GPRLMPModel(ttp.TTPAnalysis):
     def __init__(
         self,
         *args,
-        uncentered=False,
         noise=0.001,
         niter=500,
         temperature_scale=1000.0,
@@ -140,20 +210,12 @@ class GPRLMPModel(ttp.TTPAnalysis):
         self.niter = niter
         self.temperature_scale = temperature_scale
 
-        self.uncentered = uncentered
+        self.heat_counts = [len(h) for h in self.heat_indices.values()]
+        self.heat_id = {h: i for i, h in enumerate(self.heat_indices.keys())}
+        self.flat_indices = np.zeros(len(self.temperature), dtype=int)
 
-        if self.uncentered:
-            n = len(self.time)
-            self.heat_counts = [n]
-            self.heat_id = {0: 0}
-            self.flat_indices = np.zeros(n, dtype=int)
-        else:
-            self.heat_counts = [len(h) for h in self.heat_indices.values()]
-            self.heat_id = {h: i for i, h in enumerate(self.heat_indices.keys())}
-            self.flat_indices = np.zeros(len(self.temperature), dtype=int)
-
-            for i, h in enumerate(self.heat_indices.keys()):
-                self.flat_indices[self.heat_indices[h]] = i
+        for i, h in enumerate(self.heat_indices.keys()):
+            self.flat_indices[self.heat_indices[h]] = i
 
     def analyze(self, verbose=False):
         """
@@ -225,9 +287,14 @@ class GPRLMPModel(ttp.TTPAnalysis):
             )
         )
 
-        k11 = self.guide(self.X, self.y, X2=self.X)
-        k21 = self.guide(self.X, self.y, X2=Xp)
-        k22 = self.guide(Xp, self.y, X2=Xp)
+        predict = Predictive(
+            self.model,
+            guide=self.guide,
+            num_samples=1,
+        )
+        k11 = predict(self.X, self.y, X2=self.X)["cross_correlation"][0]
+        k21 = predict(Xp, self.y, X2=self.X, noise=False)["cross_correlation"][0]
+        k22 = predict(Xp, self.y, X2=Xp)["cross_correlation"][0]
 
         (
             LU,
