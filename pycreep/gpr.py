@@ -4,11 +4,17 @@
 import numpy as np
 
 import scipy.stats as ss
+import scipy.optimize as opt
+import scipy.integrate as inte
 
 import torch
+import torch.distributions as dist
 import pyro
 import pyro.contrib.gp as gp
 from torch.distributions import constraints
+
+import torchquad
+from torchquad import Simpson
 
 from pyro.contrib import gp
 from pyro.contrib.gp.kernels.kernel import Kernel
@@ -17,6 +23,9 @@ from pyro.nn.module import PyroParam
 from pycreep import ttp
 
 from tqdm import trange
+
+torch.set_default_dtype(torch.float64)
+torchquad.set_up_backend("torch", data_type="float64", torch_enable_cuda=False)
 
 
 class LMKernel(Kernel):
@@ -64,7 +73,7 @@ class LMKernel(Kernel):
         Args:
             X (torch.tensor): input data, shape (N,3)
         """
-        mean_X = X[:, 0] * (self.C_mean + torch.log10(X[:, 1]))
+        mean_X = X[:, 0] * (self.C_mean + X[:, 1])
         var_X = X[:, 0] ** 2.0 * self.C_variance
 
         return mean_X, var_X
@@ -150,15 +159,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
             verbose (bool):     print out the training progress
         """
         # Set up the input data in order
-        X = torch.tensor(
-            np.stack(
-                [
-                    self.temperature / self.temperature_scale,
-                    self.time,
-                ],
-                axis=1,
-            )
-        )
+        X = self._assemble_X(torch.tensor(self.time), torch.tensor(self.temperature))
         y = torch.log10(torch.tensor(self.stress))
 
         # Setup optimizer
@@ -193,6 +194,120 @@ class GPRLMPModel(ttp.TTPAnalysis):
 
         return self
 
+    def _assemble_X(self, time, temperature):
+        """
+        Assemble the input data for the GP
+
+        Args:
+            time (torch.tensor): time
+            temperature (torch.tensor): temperature
+        """
+        return torch.stack(
+            [
+                temperature / self.temperature_scale,
+                torch.log10(time),
+            ],
+            dim=1,
+        )
+
+    def prob_log_stress(self, stress, time, temperature):
+        """
+        Calculate the probability of a given stress at a given time and temperature
+
+        Args:
+            stress (np.array): stress
+            time (np.array): time
+            temperature (np.array): temperature
+        """
+        return (
+            self.prob_log_stress_torch(
+                torch.tensor(stress), torch.tensor(time), torch.tensor(temperature)
+            )
+            .cpu()
+            .numpy()
+        )
+
+    def prob_log_stress_torch(self, stress, time, temperature):
+        """
+        Calculate the probability of a given log stress at a given time and temperature
+
+        This version takes torch inputs
+
+        Args:
+            stress (torch.tensor): stress
+            time (torch.tensor): time
+            temperature (torch.tensor): temperature
+        """
+        X = self._assemble_X(time.flatten(), temperature.flatten())
+
+        with torch.no_grad():
+            mean, var = self.gp(X, full_cov=False, noiseless=False)
+
+        return torch.exp(
+            dist.Normal(mean, torch.sqrt(var)).log_prob(torch.log10(stress.flatten()))
+        ).reshape(stress.shape)
+
+    def prob_log_time(self, time, stress, temperature):
+        """
+        Calculate the probability of a given log time at a given stress and temperature
+
+        Args:
+            time (np.array): time
+            stress (np.array): stress
+            temperature (np.array): temperature
+        """
+        return (
+            self.prob_log_time_torch(
+                torch.tensor(time), torch.tensor(stress), torch.tensor(temperature)
+            )
+            .cpu()
+            .numpy()
+        )
+
+    def prob_log_time_torch(self, time, stress, temperature, N=501, dt=6.0):
+        """
+        Calculate the probability of a given log time at a given stress and temperature
+
+        This version takes torch inputs
+
+        Args:
+            time (torch.tensor): time
+            stress (torch.tensor): stress
+            temperature (torch.tensor): temperature
+
+        Keyword Args:
+            N (int): number of points for integration
+            dt (float): log time range for integratio
+        """
+        p_stress = self.prob_log_stress_torch(stress, time, temperature)
+        domain = torch.tensor([[0, 1.0]])
+        actual_domains = torch.stack(
+            [torch.log10(time) - dt, torch.log10(time) + dt], dim=0
+        )
+        simp = Simpson()
+
+        def f(x):
+            xp = x.expand((x.shape[0],) + stress.shape)
+            actual_x = (actual_domains[1] - actual_domains[0]) * xp + actual_domains[0]
+            dj = actual_domains[1] - actual_domains[0]
+            return (
+                self.prob_log_stress_torch(
+                    stress.unsqueeze(0).expand(xp.shape),
+                    10.0**actual_x,
+                    temperature.unsqueeze(0).expand(xp.shape),
+                )
+                * dj
+            )
+
+        nf = simp.integrate(
+            f,
+            dim=1,
+            integration_domain=domain,
+            N=N,
+        )
+
+        return p_stress / nf
+
     def predict_log_stress(self, time, temperature):
         """
         Predict the log stress at a given time and temperature
@@ -204,15 +319,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
         if np.isscalar(temperature):
             temperature = np.full_like(time, temperature)
 
-        X = torch.tensor(
-            np.stack(
-                [
-                    temperature / self.temperature_scale,
-                    time,
-                ],
-                axis=1,
-            )
-        )
+        X = self._assemble_X(torch.tensor(time), torch.tensor(temperature))
 
         with torch.no_grad():
             mean, var = self.gp(X, full_cov=False, noiseless=False)
@@ -231,6 +338,65 @@ class GPRLMPModel(ttp.TTPAnalysis):
             confidence (float): confidence level for the prediction, default is None
         """
         log_mean, log_var = self.predict_log_stress(time, temperature)
+
+        if confidence is None:
+            return 10.0**log_mean
+
+        z = ss.norm.interval(np.abs(confidence))[1]
+
+        return 10.0 ** (log_mean - np.sign(confidence) * z * np.sqrt(log_var))
+
+    def predict_log_time(self, stress, temperature, stress_guess=200.0, dt=3.0, N=25):
+        """
+        Predict the log time at a given stress and temperature
+
+        This assumes the distribution will be normal
+
+        Args:
+            stress (np.array): stress
+            temperature (np.array): temperature
+
+        Keyword Args:
+            stress_guess (float): initial guess for solving for the mean stress, default is 200.0
+            dt (float): log range for getting probabilities to fit a normal, default is 3.0
+            N (int): number of points for calculating the probability, default is 25
+        """
+        means = np.zeros_like(stress)
+        variances = np.zeros_like(stress)
+
+        # This strategy can't be vectorized...
+        for i, (s, T) in enumerate(zip(stress, temperature)):
+            # Solve for the predicted mean
+            v = opt.newton(
+                lambda x: self.predict_stress(np.array([x]), np.array([T]))[0] - s,
+                stress_guess,
+                tol=1e-2,
+                maxiter=25,
+            )
+            # Solve for the probability distribution over a reasonable range
+            trange = np.linspace(np.log10(v) - dt, np.log10(v) + dt, N)
+            p = self.prob_log_time(
+                10.0**trange, np.full_like(trange, s), np.full_like(trange, T)
+            )
+
+            # Calculate the mean and variance
+            means[i] = inte.simpson(trange * p, x=trange)
+            variances[i] = inte.simpson(trange**2.0 * p, x=trange) - means[i] ** 2.0
+
+        return means, variances
+
+    def predict_time(self, stress, temperature, confidence=None):
+        """
+        Predict the time a given stress and temperature
+
+        Args:
+            stress (np.array): stress
+            temperature (np.array): temperature
+
+        Keyword Args:
+            confidence (float): confidence level for the prediction, default is None
+        """
+        log_mean, log_var = self.predict_log_time(stress, temperature)
 
         if confidence is None:
             return 10.0**log_mean
