@@ -102,6 +102,102 @@ class LMKernel(Kernel):
         return mat
 
 
+class InverseGPRLPModel:
+    """
+    Inverse model mapping (average) stress and temperature to time
+
+    Keyword Args:
+        kernel (gp.kernels.Kernel): kernel for the GP, default is RBF
+        noise (float): noise level for the GP, default is 0.01
+        niter (int): number of iterations for training the GP, default is 200
+        lr (float): learning rate, default is 1.0e-2
+        verbose (bool): print out the training progress, default is False
+    """
+
+    def __init__(
+        self,
+        kernel=gp.kernels.RBF(input_dim=2),
+        noise=0.01,
+        niter=200,
+        lr=1.0e-2,
+        verbose=False,
+    ):
+        self.kernel = kernel
+        self.noise = noise
+        self.niter = niter
+        self.lr = lr
+        self.verbose = verbose
+
+    def train(self, time, temperature, stress):
+        # Setup optimizer
+        X = self._assemble_X(stress, temperature)
+        y = time
+
+        with pyro.get_param_store().scope() as self.backward_model:
+            self.gp = gp.models.GPRegression(
+                X, y, self.kernel, torch.tensor(self.noise)
+            )
+            optimizer = torch.optim.Adam(self.gp.parameters(), lr=self.lr)
+            loss_fn = pyro.infer.Trace_ELBO().differentiable_loss
+
+            # Closure for optimizer
+            def closure():
+                optimizer.zero_grad()
+                loss = loss_fn(self.gp.model, self.gp.guide)
+                loss.backward()
+                return loss
+
+            # Optimize
+            if self.verbose:
+                iter = trange(self.niter)
+                iter.set_description("loss= ")
+            else:
+                iter = range(self.niter)
+
+            for _ in iter:
+                loss = optimizer.step(closure)
+
+                if self.verbose:
+                    iter.set_description("loss=%e" % loss)
+
+    def __call__(self, stress, temperature):
+        return self.predict_log_time(stress, temperature)
+
+    def predict_log_time(self, stress, temperature):
+        """
+        Predict the log time at a given stress and temperature
+
+        Args:
+            stress (torch.tensor): log stress
+            temperature (torch.tensor): scaled temperature
+        """
+        with pyro.get_param_store().scope(self.backward_model):
+            with torch.no_grad():
+                mean, _ = self.gp(
+                    self._assemble_X(stress, temperature),
+                    full_cov=False,
+                    noiseless=False,
+                )
+
+        return mean
+
+    def _assemble_X(self, stress, temperature):
+        """
+        Assemble the input data for the GP
+
+        Args:
+            stress (torch.tensor): stress
+            temperature (torch.tensor): temperature
+        """
+        return torch.stack(
+            [
+                temperature,
+                stress,
+            ],
+            dim=1,
+        )
+
+
 class GPRLMPModel(ttp.TTPAnalysis):
     """
     Parent class for Gaussian process regression Larson-Miller models
@@ -114,6 +210,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
         niter (int):                number of iterations for training the GP, default is 200
         lr (float):                 learning rate, default is 1.0e-2
         temperature_scale (float):  scale factor for temperature, default is 1000.0
+        npoints_backward (int):     number of points in each dimension to train the backward model, default is 50
         time_field (str):           field in array giving time, default is
                                     "Life (h)"
         temp_field (str):           field in array giving temperature, default
@@ -142,6 +239,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
         niter=200,
         lr=1.0e-2,
         temperature_scale=1000.0,
+        npoints_backward=25,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -150,6 +248,8 @@ class GPRLMPModel(ttp.TTPAnalysis):
         self.niter = niter
         self.lr = lr
         self.temperature_scale = temperature_scale
+
+        self.npoints_backward = npoints_backward
 
     def analyze(self, verbose=False):
         """
@@ -164,35 +264,65 @@ class GPRLMPModel(ttp.TTPAnalysis):
 
         # Setup optimizer
         pyro.clear_param_store()
-        self.kernel = LMKernel()
+        with pyro.get_param_store().scope() as self.forward_model:
+            self.kernel = LMKernel()
 
-        self.gp = gp.models.GPRegression(X, y, self.kernel, torch.tensor(self.noise))
-        optimizer = torch.optim.Adam(self.gp.parameters(), lr=self.lr)
-        loss_fn = pyro.infer.Trace_ELBO().differentiable_loss
+            self.gp = gp.models.GPRegression(
+                X, y, self.kernel, torch.tensor(self.noise)
+            )
+            optimizer = torch.optim.Adam(self.gp.parameters(), lr=self.lr)
+            loss_fn = pyro.infer.Trace_ELBO().differentiable_loss
 
-        # Closure for optimizer
-        def closure():
-            optimizer.zero_grad()
-            loss = loss_fn(self.gp.model, self.gp.guide)
-            loss.backward()
-            return loss
+            # Closure for optimizer
+            def closure():
+                optimizer.zero_grad()
+                loss = loss_fn(self.gp.model, self.gp.guide)
+                loss.backward()
+                return loss
 
-        # Optimize
-        if verbose:
-            iter = trange(self.niter)
-            iter.set_description("loss= ")
-        else:
-            iter = range(self.niter)
-
-        for _ in iter:
-            loss = optimizer.step(closure)
-
+            # Optimize
             if verbose:
-                iter.set_description("loss=%e" % loss)
+                iter = trange(self.niter)
+                iter.set_description("loss= ")
+            else:
+                iter = range(self.niter)
 
-        self.C_avg = self.kernel.C_mean.item()
+            for _ in iter:
+                loss = optimizer.step(closure)
+
+                if verbose:
+                    iter.set_description("loss=%e" % loss)
+
+        self._train_backward_model(verbose)
 
         return self
+
+    def _train_backward_model(self, verbose=False):
+        """
+        Train the inverse model
+        """
+        time, temperature = torch.meshgrid(
+            torch.linspace(
+                np.log10(np.min(self.time)),
+                np.log10(np.max(self.time)),
+                self.npoints_backward,
+            ),
+            torch.linspace(
+                np.min(self.temperature),
+                np.max(self.temperature),
+                self.npoints_backward,
+            ),
+        )
+        stress, _ = self.predict_log_stress(
+            10.0 ** time.flatten().cpu().numpy(), temperature.flatten().cpu().numpy()
+        )
+
+        self.backward_model = InverseGPRLPModel(verbose=verbose)
+        self.backward_model.train(
+            time.flatten(),
+            temperature.flatten() / self.temperature_scale,
+            torch.tensor(stress),
+        )
 
     def _assemble_X(self, time, temperature):
         """
@@ -240,8 +370,9 @@ class GPRLMPModel(ttp.TTPAnalysis):
         """
         X = self._assemble_X(time.flatten(), temperature.flatten())
 
-        with torch.no_grad():
-            mean, var = self.gp(X, full_cov=False, noiseless=False)
+        with pyro.get_param_store().scope(self.forward_model):
+            with torch.no_grad():
+                mean, var = self.gp(X, full_cov=False, noiseless=False)
 
         return torch.exp(
             dist.Normal(mean, torch.sqrt(var)).log_prob(torch.log10(stress.flatten()))
@@ -321,8 +452,9 @@ class GPRLMPModel(ttp.TTPAnalysis):
 
         X = self._assemble_X(torch.tensor(time), torch.tensor(temperature))
 
-        with torch.no_grad():
-            mean, var = self.gp(X, full_cov=False, noiseless=False)
+        with pyro.get_param_store().scope(self.forward_model):
+            with torch.no_grad():
+                mean, var = self.gp(X, full_cov=False, noiseless=False)
 
         return mean.numpy(), var.numpy()
 
@@ -346,7 +478,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
 
         return 10.0 ** (log_mean - np.sign(confidence) * z * np.sqrt(log_var))
 
-    def predict_log_time(self, stress, temperature, stress_guess=200.0, dt=3.0, N=25):
+    def predict_log_time(self, stress, temperature, dt=3.0, N=25):
         """
         Predict the log time at a given stress and temperature
 
@@ -357,33 +489,39 @@ class GPRLMPModel(ttp.TTPAnalysis):
             temperature (np.array): temperature
 
         Keyword Args:
-            stress_guess (float): initial guess for solving for the mean stress, default is 200.0
             dt (float): log range for getting probabilities to fit a normal, default is 3.0
             N (int): number of points for calculating the probability, default is 25
         """
-        means = np.zeros_like(stress)
-        variances = np.zeros_like(stress)
+        # Solve for the means
+        mean_log_time = self.backward_model(
+            torch.log10(torch.tensor(stress)),
+            torch.tensor(temperature) / self.temperature_scale,
+        )
 
-        # This strategy can't be vectorized...
-        for i, (s, T) in enumerate(zip(stress, temperature)):
-            # Solve for the predicted mean
-            v = opt.newton(
-                lambda x: self.predict_stress(np.array([x]), np.array([T]))[0] - s,
-                stress_guess,
-                tol=1e-2,
-                maxiter=25,
-            )
-            # Solve for the probability distribution over a reasonable range
-            trange = np.linspace(np.log10(v) - dt, np.log10(v) + dt, N)
-            p = self.prob_log_time(
-                10.0**trange, np.full_like(trange, s), np.full_like(trange, T)
-            )
+        # Expand a n x N array for the times to consider
+        rng = torch.linspace(-dt, dt, N)
+        log_time_range = mean_log_time.unsqueeze(1) + rng
 
-            # Calculate the mean and variance
-            means[i] = inte.simpson(trange * p, x=trange)
-            variances[i] = inte.simpson(trange**2.0 * p, x=trange) - means[i] ** 2.0
+        # Calculate the probability distribution
+        p = self.prob_log_time_torch(
+            10.0 ** log_time_range.flatten(),
+            torch.tensor(stress).unsqueeze(1).expand(log_time_range.shape).flatten(),
+            torch.tensor(temperature)
+            .unsqueeze(1)
+            .expand(log_time_range.shape)
+            .flatten(),
+        )
+        p = p.reshape(log_time_range.shape)
 
-        return means, variances
+        # This will be fast...
+        # If it's not obvious this is the midpoint rule
+        dt = torch.diff(log_time_range, dim=1)
+        pX = p * log_time_range
+        means = torch.sum((pX[:, :1] + pX[:, :-1]) / 2.0 * dt, dim=1)
+        pXX = p * log_time_range**2.0
+        variances = torch.sum((pXX[:, :1] + pXX[:, :-1]) / 2.0 * dt, dim=1) - means**2.0
+
+        return means.cpu().numpy(), variances.cpu().numpy()
 
     def predict_time(self, stress, temperature, confidence=None):
         """
