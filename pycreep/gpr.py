@@ -118,7 +118,7 @@ class InverseGPRLPModel:
         self,
         kernel=gp.kernels.RBF(input_dim=2),
         noise=0.01,
-        niter=200,
+        niter=500,
         lr=1.0e-2,
         verbose=False,
     ):
@@ -173,13 +173,11 @@ class InverseGPRLPModel:
         """
         with pyro.get_param_store().scope(self.backward_model):
             with torch.no_grad():
-                mean, _ = self.gp(
+                return self.gp(
                     self._assemble_X(stress, temperature),
                     full_cov=False,
                     noiseless=False,
                 )
-
-        return mean
 
     def _assemble_X(self, stress, temperature):
         """
@@ -239,7 +237,8 @@ class GPRLMPModel(ttp.TTPAnalysis):
         niter=200,
         lr=1.0e-2,
         temperature_scale=1000.0,
-        npoints_backward=25,
+        npoints_backward=15,
+        nsamples_backward=5,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -250,6 +249,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
         self.temperature_scale = temperature_scale
 
         self.npoints_backward = npoints_backward
+        self.nsamples_backward = nsamples_backward
 
     def analyze(self, verbose=False):
         """
@@ -313,15 +313,20 @@ class GPRLMPModel(ttp.TTPAnalysis):
                 self.npoints_backward,
             ),
         )
-        stress, _ = self.predict_log_stress(
+        mean, variance = self.predict_log_stress(
             10.0 ** time.flatten().cpu().numpy(), temperature.flatten().cpu().numpy()
         )
-
+        stress = (
+            dist.Normal(torch.tensor(mean), torch.sqrt(torch.tensor(variance)))
+            .sample((self.nsamples_backward,))
+            .reshape((self.nsamples_backward,) + temperature.shape)
+        )
         self.backward_model = InverseGPRLPModel(verbose=verbose)
         self.backward_model.train(
-            time.flatten(),
-            temperature.flatten() / self.temperature_scale,
-            torch.tensor(stress),
+            time.unsqueeze(0).expand(stress.shape).flatten(),
+            temperature.unsqueeze(0).expand(stress.shape).flatten()
+            / self.temperature_scale,
+            stress.flatten(),
         )
 
     def _assemble_X(self, time, temperature):
@@ -339,105 +344,6 @@ class GPRLMPModel(ttp.TTPAnalysis):
             ],
             dim=1,
         )
-
-    def prob_log_stress(self, stress, time, temperature):
-        """
-        Calculate the probability of a given stress at a given time and temperature
-
-        Args:
-            stress (np.array): stress
-            time (np.array): time
-            temperature (np.array): temperature
-        """
-        return (
-            self.prob_log_stress_torch(
-                torch.tensor(stress), torch.tensor(time), torch.tensor(temperature)
-            )
-            .cpu()
-            .numpy()
-        )
-
-    def prob_log_stress_torch(self, stress, time, temperature):
-        """
-        Calculate the probability of a given log stress at a given time and temperature
-
-        This version takes torch inputs
-
-        Args:
-            stress (torch.tensor): stress
-            time (torch.tensor): time
-            temperature (torch.tensor): temperature
-        """
-        X = self._assemble_X(time.flatten(), temperature.flatten())
-
-        with pyro.get_param_store().scope(self.forward_model):
-            with torch.no_grad():
-                mean, var = self.gp(X, full_cov=False, noiseless=False)
-
-        return torch.exp(
-            dist.Normal(mean, torch.sqrt(var)).log_prob(torch.log10(stress.flatten()))
-        ).reshape(stress.shape)
-
-    def prob_log_time(self, time, stress, temperature):
-        """
-        Calculate the probability of a given log time at a given stress and temperature
-
-        Args:
-            time (np.array): time
-            stress (np.array): stress
-            temperature (np.array): temperature
-        """
-        return (
-            self.prob_log_time_torch(
-                torch.tensor(time), torch.tensor(stress), torch.tensor(temperature)
-            )
-            .cpu()
-            .numpy()
-        )
-
-    def prob_log_time_torch(self, time, stress, temperature, N=501, dt=6.0):
-        """
-        Calculate the probability of a given log time at a given stress and temperature
-
-        This version takes torch inputs
-
-        Args:
-            time (torch.tensor): time
-            stress (torch.tensor): stress
-            temperature (torch.tensor): temperature
-
-        Keyword Args:
-            N (int): number of points for integration
-            dt (float): log time range for integratio
-        """
-        p_stress = self.prob_log_stress_torch(stress, time, temperature)
-        domain = torch.tensor([[0, 1.0]])
-        actual_domains = torch.stack(
-            [torch.log10(time) - dt, torch.log10(time) + dt], dim=0
-        )
-        simp = Simpson()
-
-        def f(x):
-            xp = x.expand((x.shape[0],) + stress.shape)
-            actual_x = (actual_domains[1] - actual_domains[0]) * xp + actual_domains[0]
-            dj = actual_domains[1] - actual_domains[0]
-            return (
-                self.prob_log_stress_torch(
-                    stress.unsqueeze(0).expand(xp.shape),
-                    10.0**actual_x,
-                    temperature.unsqueeze(0).expand(xp.shape),
-                )
-                * dj
-            )
-
-        nf = simp.integrate(
-            f,
-            dim=1,
-            integration_domain=domain,
-            N=N,
-        )
-
-        return p_stress / nf
 
     def predict_log_stress(self, time, temperature):
         """
@@ -489,39 +395,21 @@ class GPRLMPModel(ttp.TTPAnalysis):
             temperature (np.array): temperature
 
         Keyword Args:
+            stress_guess (float): initial guess for solving for the mean stress, default is 200.0
             dt (float): log range for getting probabilities to fit a normal, default is 3.0
             N (int): number of points for calculating the probability, default is 25
         """
-        # Solve for the means
-        mean_log_time = self.backward_model(
-            torch.log10(torch.tensor(stress)),
-            torch.tensor(temperature) / self.temperature_scale,
-        )
+        if np.isscalar(temperature):
+            temperature = np.full_like(stress, temperature)
 
-        # Expand a n x N array for the times to consider
-        rng = torch.linspace(-dt, dt, N)
-        log_time_range = mean_log_time.unsqueeze(1) + rng
+        with pyro.get_param_store().scope(self.forward_model):
+            with torch.no_grad():
+                mean, var = self.backward_model(
+                    torch.log10(torch.tensor(stress)),
+                    torch.tensor(temperature) / self.temperature_scale,
+                )
 
-        # Calculate the probability distribution
-        p = self.prob_log_time_torch(
-            10.0 ** log_time_range.flatten(),
-            torch.tensor(stress).unsqueeze(1).expand(log_time_range.shape).flatten(),
-            torch.tensor(temperature)
-            .unsqueeze(1)
-            .expand(log_time_range.shape)
-            .flatten(),
-        )
-        p = p.reshape(log_time_range.shape)
-
-        # This will be fast...
-        # If it's not obvious this is the midpoint rule
-        dt = torch.diff(log_time_range, dim=1)
-        pX = p * log_time_range
-        means = torch.sum((pX[:, :1] + pX[:, :-1]) / 2.0 * dt, dim=1)
-        pXX = p * log_time_range**2.0
-        variances = torch.sum((pXX[:, :1] + pXX[:, :-1]) / 2.0 * dt, dim=1) - means**2.0
-
-        return means.cpu().numpy(), variances.cpu().numpy()
+        return mean.numpy(), var.numpy()
 
     def predict_time(self, stress, temperature, confidence=None):
         """
