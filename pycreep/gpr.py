@@ -1,28 +1,23 @@
-"""Implements Larson-Miller Gaussian process regression
-"""
+"""Implements Larson-Miller Gaussian process regression"""
 
 import numpy as np
 
 import scipy.stats as ss
-import scipy.optimize as opt
-import scipy.integrate as inte
 
 import torch
 import torch.distributions as dist
-import pyro
-import pyro.contrib.gp as gp
 from torch.distributions import constraints
 
 import torchquad
-from torchquad import Simpson
 
+import pyro
 from pyro.contrib import gp
 from pyro.contrib.gp.kernels.kernel import Kernel
 from pyro.nn.module import PyroParam
 
-from pycreep import ttp
-
 from tqdm import trange
+
+from pycreep import ttp
 
 torch.set_default_dtype(torch.float64)
 torchquad.set_up_backend("torch", data_type="float64", torch_enable_cuda=False)
@@ -129,6 +124,14 @@ class InverseGPRLPModel:
         self.verbose = verbose
 
     def train(self, time, temperature, stress):
+        """
+        Train the model on the creep data
+
+        Args:
+            time (torch.tensor): time
+            temperature (torch.tensor): temperature
+            stress (torch.tensor): stress
+        """
         # Setup optimizer
         X = self._assemble_X(stress, temperature)
         y = time
@@ -149,16 +152,16 @@ class InverseGPRLPModel:
 
             # Optimize
             if self.verbose:
-                iter = trange(self.niter)
-                iter.set_description("loss= ")
+                iterer = trange(self.niter)
+                iterer.set_description("loss= ")
             else:
-                iter = range(self.niter)
+                iterer = range(self.niter)
 
-            for _ in iter:
+            for _ in iterer:
                 loss = optimizer.step(closure)
 
                 if self.verbose:
-                    iter.set_description("loss=%e" % loss)
+                    iterer.set_description(f"loss={loss:e}")
 
     def __call__(self, stress, temperature):
         return self.predict_log_time(stress, temperature)
@@ -208,7 +211,8 @@ class GPRLMPModel(ttp.TTPAnalysis):
         niter (int):                number of iterations for training the GP, default is 200
         lr (float):                 learning rate, default is 1.0e-2
         temperature_scale (float):  scale factor for temperature, default is 1000.0
-        npoints_backward (int):     number of points in each dimension to train the backward model, default is 50
+        npoints_backward (int):     number of points in each dimension to train the backward model,
+                                    default is 50
         time_field (str):           field in array giving time, default is
                                     "Life (h)"
         temp_field (str):           field in array giving temperature, default
@@ -282,16 +286,16 @@ class GPRLMPModel(ttp.TTPAnalysis):
 
             # Optimize
             if verbose:
-                iter = trange(self.niter)
-                iter.set_description("loss= ")
+                iterer = trange(self.niter)
+                iterer.set_description("loss= ")
             else:
-                iter = range(self.niter)
+                iterer = range(self.niter)
 
-            for _ in iter:
+            for _ in iterer:
                 loss = optimizer.step(closure)
 
                 if verbose:
-                    iter.set_description("loss=%e" % loss)
+                    iterer.set_description(f"loss={loss:e}")
 
         self._train_backward_model(verbose)
 
@@ -312,6 +316,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
                 np.max(self.temperature),
                 self.npoints_backward,
             ),
+            indexing="ij",
         )
         mean, variance = self.predict_log_stress(
             10.0 ** time.flatten().cpu().numpy(), temperature.flatten().cpu().numpy()
@@ -384,7 +389,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
 
         return 10.0 ** (log_mean - np.sign(confidence) * z * np.sqrt(log_var))
 
-    def predict_log_time(self, stress, temperature, dt=3.0, N=25):
+    def predict_log_time(self, stress, temperature):
         """
         Predict the log time at a given stress and temperature
 
@@ -393,11 +398,6 @@ class GPRLMPModel(ttp.TTPAnalysis):
         Args:
             stress (np.array): stress
             temperature (np.array): temperature
-
-        Keyword Args:
-            stress_guess (float): initial guess for solving for the mean stress, default is 200.0
-            dt (float): log range for getting probabilities to fit a normal, default is 3.0
-            N (int): number of points for calculating the probability, default is 25
         """
         if np.isscalar(temperature):
             temperature = np.full_like(stress, temperature)
