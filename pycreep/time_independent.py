@@ -276,7 +276,9 @@ class UserPolynomialTimeIndependentCorrelation(UserProvidedTimeIndependentCorrel
         self.fn = Polynomial(self.coefs[::-1])
 
 
-class ASMEPolynomialTimeIndependentCorrelation(UserProvidedTimeIndependentCorrelation):
+class SimpleASMEPolynomialTimeIndependentCorrelation(
+    UserProvidedTimeIndependentCorrelation
+):
     """
     ASME type correlation of
 
@@ -299,3 +301,223 @@ class ASMEPolynomialTimeIndependentCorrelation(UserProvidedTimeIndependentCorrel
         Run the stress analysis and store results
         """
         self.fn = lambda T: self.F * self.S0 * np.polyval(self.coefs[::-1], T / self.T0)
+
+
+class StandardASMEPolynomialTimeIndependentCorrelation(
+    UserProvidedTimeIndependentCorrelation
+):
+    """
+    ASME type correlation of
+
+    min(F * S * (1 + p[1] * (T-T0)**1 + p[2] * (T-T0)**2 + ...), S)
+
+    Args:
+        poly:       polynomial in standard
+    """
+
+    def __init__(self, F, S0, T0, poly, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.F = F
+        self.S0 = S0
+        self.T0 = T0
+        self.coefs = poly
+
+    def analyze(self):
+        """
+        Run the stress analysis and store results
+        """
+        self.fn = lambda T: np.minimum(
+            self.F * self.S0 * np.polyval(self.coefs[::-1], T - self.T0), self.S0
+        )
+
+
+class TensileDataAnalysis(dataset.DataSet):
+    """
+    Superclass for time-temperature parameter (TTP) analysis of a
+    dataset
+
+    Args:
+        data:                       dataset as a pandas dataframe
+
+    Keyword Args:
+        temp_field (str):           field in array giving temperature, default
+                                    is "Temp (C)"
+        yield_strength_field (str): field in array giving yield stress, default is
+                                    "Yield Strength (MPa)"
+        tensile_strength_field (str): field in array giving tensile strength, default is
+                                    "Tensile Strength (MPa)"
+        heat_field (str):           filed in array giving heat ID, default is
+                                    "Heat/Lot ID"
+        input_temp_units (str):     temperature units, default is "C"
+        input_stress_units (str):   stress units, default is "MPa"
+        analysis_temp_units (str):  temperature units for analysis,
+                                    default is "C"
+        analysis_stress_units (str):    analysis stress units, default is
+                                        "MPa"
+
+    The analyzed model must provide Sy(T) and Su(T) methods.
+    """
+
+    def __init__(
+        self,
+        data,
+        temp_field="Temp (C)",
+        yield_strength_field="Yield Strength (MPa)",
+        tensile_strength_field="Tensile Strength (MPa)",
+        heat_field="Heat/Lot ID",
+        input_temp_units="degC",
+        input_stress_units="MPa",
+        analysis_temp_units="degC",
+        analysis_stress_units="MPa",
+    ):
+        super().__init__(data)
+
+        self.add_field_units(
+            "temperature", temp_field, input_temp_units, analysis_temp_units
+        )
+        self.add_field_units(
+            "yield_strength",
+            yield_strength_field,
+            input_stress_units,
+            analysis_stress_units,
+        )
+        self.add_field_units(
+            "tensile_strength",
+            tensile_strength_field,
+            input_stress_units,
+            analysis_stress_units,
+        )
+
+        self.analysis_temp_units = analysis_temp_units
+        self.analysis_stress_units = analysis_stress_units
+
+        self.add_heat_field(heat_field)
+
+
+class ASMETensileDataAnalysis(TensileDataAnalysis):
+    """
+    ASME type tensile data analysis
+
+    Args:
+        order_yield:                      polynomial order for yield correlation
+        order_tensile:                    polynomial order for tensile correlation
+        min_yield:                 minimum yield strength value
+        min_tensile:               minimum tensile strength value
+        data:                       dataset as a pandas dataframe
+
+    Keyword Args:
+        temp_field (str):           field in array giving temperature, default
+                                    is "Temp (C)"
+        yield_strength_field (str): field in array giving yield stress, default is
+                                    "Yield Strength (MPa)"
+        tensile_strength_field (str): field in array giving tensile strength, default is
+                                    "Tensile Strength (MPa)"
+        heat_field (str):           filed in array giving heat ID, default is
+                                    "Heat/Lot ID"
+        input_temp_units (str):     temperature units, default is "C"
+        input_stress_units (str):   stress units, default is "MPa"
+        analysis_temp_units (str):  temperature units for analysis,
+                                    default is "K"
+        analysis_stress_units (str):    analysis stress units, default is
+                                        "MPa"
+        room_temperature (float):       room temperature value in analysis units
+        rt_threshold (float):           tolerance for finding RT values
+        F_yield (float):            factor on the yield strength correlation, default 1.0
+        F_tensile (float):          factor on the tensile strength correlation, default 1.1
+    """
+
+    def __init__(
+        self,
+        order_yield,
+        order_tensile,
+        min_yield,
+        min_tensile,
+        *args,
+        room_temperature=21.0,
+        rt_threshold=10.0,
+        F_yield=1.0,
+        F_tensile=1.1,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.order_yield = order_yield
+        self.order_tensile = order_tensile
+        self.room_temperature = room_temperature
+        self.rt_threshold = rt_threshold
+
+        self.min_yield = min_yield
+        self.min_tensile = min_tensile
+
+        self.F_yield = F_yield
+        self.F_tensile = F_tensile
+
+    def _heat_rt_props(self, field):
+        """
+        Calculate the heat-specific room temperature values of field
+
+        Args:
+            field (np.array): input field
+        """
+        rt_values = np.zeros_like(field)
+        for i, (name, inds) in enumerate(self.heat_indices.items()):
+            T_vals = self.temperature[inds]
+            T_rt = np.logical_and(
+                T_vals > self.room_temperature - self.rt_threshold,
+                T_vals < self.room_temperature + self.rt_threshold,
+            )
+            if np.all(np.logical_not(T_rt)):
+                raise RuntimeError(f"Heat {name} is missing room temperature data")
+            rt_values[inds] = np.mean(field[inds][T_rt])
+
+        return rt_values
+
+    def analyze(self):
+        """
+        Run the regression analysis
+        """
+        rt_yield = self._heat_rt_props(self.yield_strength)
+        rt_tensile = self._heat_rt_props(self.tensile_strength)
+
+        self.R_yield = self.yield_strength / rt_yield
+        self.R_tensile = self.tensile_strength / rt_tensile
+
+        self.poly_yield, self.R2_yield = methods.asme_tensile_analysis(
+            self.temperature, self.R_yield, self.order_yield, Tref=self.room_temperature
+        )
+        self.poly_tensile, self.R2_tensile = methods.asme_tensile_analysis(
+            self.temperature,
+            self.R_tensile,
+            self.order_tensile,
+            Tref=self.room_temperature,
+        )
+
+        return self
+
+    def Sy(self, T):
+        """
+        Design yield strength at temperature T
+
+        Args:
+            T:      temperature data
+        """
+        return np.minimum(
+            np.polyval(self.poly_yield, T - self.room_temperature)
+            * self.F_yield
+            * self.min_yield,
+            self.min_yield,
+        )
+
+    def Su(self, T):
+        """
+        Design tensile strength at temperature T
+
+        Args:
+            T:      temperature data
+        """
+        return np.minimum(
+            np.polyval(self.poly_tensile, T - self.room_temperature)
+            * self.F_tensile
+            * self.min_tensile,
+            self.min_tensile,
+        )

@@ -93,3 +93,29 @@ def optimize_polynomial_fit(x, y, deg, X0, bounds, map_fn):
     res = opt.minimize(fn, X0, method="L-BFGS-B", bounds=bounds)
 
     return (res.x,) + polynomial_fit(map_fn(x, res.x), y, deg)
+
+
+def asme_tensile_analysis(T, R, order, Tref=21.0):
+    """
+    Constrained polynomial regression to give the polynomial coefficients of an ASME-type tensile analysis
+
+    Args:
+        T:      temperatures
+        R:      normalized stress
+        order:  polynomial order
+
+    Keyword Args:
+        Tref:   reference temperature (default 21 C)
+
+    Returns:
+        p (np.array): polynomial coefficients
+        R2 (float): coefficient of determination
+    """
+    x = T - Tref
+    y = R - 1
+    V = np.vander(x, order + 1)[:, :-1]
+
+    p, _, _, R2, _ = least_squares(V, y)
+    p = np.concatenate((p, [1.0]))  # Add the constant term
+
+    return p, R2
