@@ -253,7 +253,7 @@ class PolynomialAnalysis(TTPAnalysis):
         if confidence is None:
             h = 0.0
         else:
-            h = scipy.stats.norm.interval(confidence)[1]
+            h = np.sign(confidence) * scipy.stats.norm.interval(np.abs(confidence))[1]
 
         return 10.0 ** (
             self.time_sign
