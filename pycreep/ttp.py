@@ -262,7 +262,7 @@ class PolynomialAnalysis(TTPAnalysis):
             )
         )
 
-    def predict_stress(self, time, temperature, confidence=None, root_bounds=None):
+    def predict_stress(self, time, temperature, confidence=None, root_bounds=None, raise_on_error = True):
         """
         Predict new values of stress given time and temperature
 
@@ -275,6 +275,7 @@ class PolynomialAnalysis(TTPAnalysis):
                             average predictions
             root_bounds:    if not None, lower and upper bounds on which root value to use
                             when inverting the TTP polynomial
+            raise_on_error: if true throw an error if we can't invert.  if not return nan
         """
         # Will want these sorted
         if root_bounds is not None:
@@ -298,7 +299,10 @@ class PolynomialAnalysis(TTPAnalysis):
             pi[-1] -= x
             rs = np.array(np.roots(pi))
             if np.all(np.abs(np.imag(rs)) > 0):
-                raise ValueError("Inverting relation to predict stress failed")
+                if raise_on_error:
+                    raise ValueError("Inverting relation to predict stress failed")
+                else:
+                    return np.nan
             rs[np.abs(np.imag(rs)) > 0] = 0
             rs = np.real(rs)
             # Need to consider this...
@@ -306,7 +310,10 @@ class PolynomialAnalysis(TTPAnalysis):
                 return np.max(rs)
             val = np.logical_and(rs >= root_bounds[0], rs <= root_bounds[1])
             if np.all(np.logical_not(val)):
-                raise ValueError("No root falls within user provided bounds!")
+                if raise_on_error:
+                    raise ValueError("No root falls within user provided bounds!")
+                else:
+                    return np.nan
             return rs[val][0]
 
         # Solve each one, one at a time, for now
