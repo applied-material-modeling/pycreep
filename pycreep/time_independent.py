@@ -460,7 +460,7 @@ class ASMETensileDataAnalysis(TensileDataAnalysis):
             field (np.array): input field
         """
         rt_values = np.zeros_like(field)
-        for i, (name, inds) in enumerate(self.heat_indices.items()):
+        for name, inds in self.heat_indices.items():
             T_vals = self.temperature[inds]
             T_rt = np.logical_and(
                 T_vals > self.room_temperature - self.rt_threshold,
