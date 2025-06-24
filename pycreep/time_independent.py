@@ -347,7 +347,7 @@ class TensileDataAnalysis(dataset.DataSet):
                                     "Yield Strength (MPa)"
         tensile_strength_field (str): field in array giving tensile strength, default is
                                     "Tensile Strength (MPa)"
-        heat_field (str):           filed in array giving heat ID, default is
+        heat_field (str):           field in array giving heat ID, default is
                                     "Heat/Lot ID"
         input_temp_units (str):     temperature units, default is "C"
         input_stress_units (str):   stress units, default is "MPa"
