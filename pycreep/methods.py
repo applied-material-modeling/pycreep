@@ -97,7 +97,8 @@ def optimize_polynomial_fit(x, y, deg, X0, bounds, map_fn):
 
 def asme_tensile_analysis(T, R, order, Tref=21.0):
     """
-    Constrained polynomial regression to give the polynomial coefficients of an ASME-type tensile analysis
+    Constrained polynomial regression to give the polynomial coefficients
+    of an ASME-type tensile analysis
 
     Args:
         T:      temperatures
