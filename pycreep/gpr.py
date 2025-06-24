@@ -369,6 +369,7 @@ class GPRLMPModel(ttp.TTPAnalysis):
 
         return mean.numpy(), var.numpy()
 
+    # pylint: disable=unused-argument
     def predict_stress(self, time, temperature, confidence=None, **kwargs):
         """
         Predict the stress at a given time and temperature
