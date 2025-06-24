@@ -262,7 +262,9 @@ class PolynomialAnalysis(TTPAnalysis):
             )
         )
 
-    def predict_stress(self, time, temperature, confidence=None, root_bounds=None, raise_on_error = True):
+    def predict_stress(
+        self, time, temperature, confidence=None, root_bounds=None, raise_on_error=True
+    ):
         """
         Predict new values of stress given time and temperature
 
@@ -301,8 +303,7 @@ class PolynomialAnalysis(TTPAnalysis):
             if np.all(np.abs(np.imag(rs)) > 0):
                 if raise_on_error:
                     raise ValueError("Inverting relation to predict stress failed")
-                else:
-                    return np.nan
+                return np.nan
             rs[np.abs(np.imag(rs)) > 0] = 0
             rs = np.real(rs)
             # Need to consider this...
@@ -312,8 +313,7 @@ class PolynomialAnalysis(TTPAnalysis):
             if np.all(np.logical_not(val)):
                 if raise_on_error:
                     raise ValueError("No root falls within user provided bounds!")
-                else:
-                    return np.nan
+                return np.nan
             return rs[val][0]
 
         # Solve each one, one at a time, for now
