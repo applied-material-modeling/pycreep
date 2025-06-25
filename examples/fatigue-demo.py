@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
-    data = pd.read_csv("/Users/messner/Work/Projects/A617-fatigue/A617-fatigue.csv")
+    data = pd.read_csv("A617-fatigue.csv")
 
     fatigue_analysis = fatigue.LumpedTemperatureFatigueAnalysis(
         fatigue.DiercksEquation(4), [850, 950], data
