@@ -1,3 +1,4 @@
+# pylint: disable=too-few-public-methods
 """Correlate fatigue data into fatigue curves"""
 
 import numpy as np
@@ -61,7 +62,8 @@ class LumpedTemperatureFatigueAnalysis(FatigueAnalysis):
         data:                       dataset as a pandas dataframe
 
     Keyword Args:
-        temperature_range (float):  range of temperatures on either side of the bins to collect, default 50
+        temperature_range (float):  range of temperatures on either side of the bins
+                                    to collect, default 50
         cycles_field (str):         field in array giving cycles to use, default is
                                     "Cycles"
         temp_field (str):           field in array giving temperature, default
