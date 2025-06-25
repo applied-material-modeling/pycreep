@@ -2,6 +2,8 @@
 Mathematical helper functions used in multiple modules
 """
 
+import bisect
+
 import numpy as np
 import numpy.linalg as la
 import scipy.optimize as opt
@@ -120,3 +122,37 @@ def asme_tensile_analysis(T, R, order, Tref=21.0):
     p = np.concatenate((p, [1.0]))  # Add the constant term
 
     return p, R2
+
+
+def find_nearest_index(sorted_list, target):
+    """
+    Finds the index of the element closest to the target in a sorted list.
+
+    Args:
+        sorted_list (list): A list of numbers sorted in ascending order.
+        target (int or float): The value to find the nearest element to.
+
+    Returns:
+        int: The index of the nearest element in the sorted list.
+    """
+    # Find the insertion point for the target
+    # bisect_left returns an index where the target could be inserted
+    # to maintain sorted order, and all elements to its left are < target.
+    # bisect_right returns an index where the target could be inserted,
+    # and all elements to its left are <= target.
+    # For finding the *nearest* value, bisect_left is often preferred as a starting point.
+    idx = bisect.bisect_left(sorted_list, target)
+
+    if idx == 0:  # Target is smaller than or equal to the first element
+        return 0
+    if idx == len(sorted_list):  # Target is larger than the last element
+        return len(sorted_list) - 1
+
+    # Compare the element at 'idx' and the element before it ('idx-1')
+    # to find which is closer to the target.
+    before = sorted_list[idx - 1]
+    after = sorted_list[idx]
+
+    if abs(target - before) <= abs(target - after):
+        return idx - 1
+    return idx
