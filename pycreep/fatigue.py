@@ -96,6 +96,10 @@ class LumpedTemperatureFatigueAnalysis(FatigueAnalysis):
             for T in self.temperature_bins
         }
 
+        for T, inds in self.temperature_groups.items():
+            if len(inds) == 0:
+                raise ValueError(f"No data found for temperature {T} C!")
+
     def analyze(self):
         """
         Analyze by fitting the methods to the data
