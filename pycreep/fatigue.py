@@ -21,7 +21,7 @@ class FatigueAnalysis(dataset.DataSet):
         strain_range_field (str):   field in array giving strain range, default is
                                     "Strain range"
         r_ratio_field (str):        field in array giving the R ratio, default is "R"
-        heat_field (str):           filed in array giving heat ID, default is
+        heat_field (str):           field in array giving heat ID, default is
                                     "Heat/Lot ID"
         input_temp_units (str):     temperature units, default is "C"
         analysis_temp_units (str):  temperature units for analysis,
