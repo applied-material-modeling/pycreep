@@ -5,3 +5,4 @@ __pycache__
 *.xlsx
 dist
 pycreep.egg-info
+.DS_Store
